@@ -1,0 +1,96 @@
+# =============================================================================
+# Reddit Comment Bot - configuration
+# Edit this file to change behavior WITHOUT touching the code.
+# =============================================================================
+
+# --- Which subreddits to scan ---
+subreddits:
+  - personalfinance
+  - legaladvice
+  - EstatePlanning
+
+# --- Post discovery ---
+discovery:
+  # Sort tab on subreddit: "new" | "hot" | "rising"
+  sort: new
+  # How many recent posts to fetch from each subreddit per run
+  posts_per_subreddit: 15
+  # Skip posts older than this (hours). Engaging on stale posts looks bot-like.
+  max_age_hours: 12
+  # Skip posts younger than this (minutes). Brand new posts often get removed.
+  min_age_minutes: 15
+  # Skip posts shorter than this (characters in the body). Low-context posts -> bad replies.
+  min_body_chars: 200
+  # When true: open each subreddit in the visible browser and SCROLL it
+  # before fetching posts, so you can watch the bot working. Slower.
+  visual_mode: true
+  # Extra: also open each candidate post in the browser ("reading" it).
+  # Only takes effect if visual_mode: true. Even slower.
+  visual_open_posts: false
+
+  # Post title+body must contain at least one keyword (case-insensitive).
+  # Applies to all subreddits — keeps comments estate / inheritance focused.
+  keywords:
+    - will
+    - estate
+    - probate
+    - inheritance
+    - trust
+    - executor
+    - beneficiary
+    - heir
+    - testament
+    - power of attorney
+    - living will
+    - intestate
+    - bequest
+    - fiduciary
+
+# --- AI behavior ---
+ai:
+  # Minimum relevance score (0-10) for a post to be commented on.
+  min_relevance_score: 8
+  # Hard caps on the generated comment - keep short & punchy
+  min_comment_chars: 80
+  max_comment_chars: 280
+  # Persona / tone the AI should write in. Edit this freely.
+  persona: |
+    You are a thoughtful, helpful Redditor with real-world experience in
+    estate planning, wills, probate, trusts, and inheritance (including how
+    those topics show up in personal finance and basic legal questions).
+    You write like a human: lowercase is fine, contractions ok, no emojis,
+    no markdown headers, no corporate tone. Give specific, practical advice
+    tied to the post. You NEVER mention being an AI. You NEVER promote
+    anything. You NEVER include URLs or product names. If unsure, say so and
+    suggest talking to an estate attorney for state-specific rules.
+
+# --- Posting behavior (SAFETY CRITICAL) ---
+posting:
+  # If true, the bot will only DRAFT comments and log them - it will NOT post.
+  dry_run: false
+  # Max comments to post per 24h window (across ALL subreddits combined).
+  daily_cap: 1
+  # Minimum minutes between two posted comments.
+  min_gap_minutes: 180
+  # Random extra delay added on top (minutes). Real humans aren't periodic.
+  jitter_minutes: 60
+  # Simulated typing speed (chars per second). Range. ~3-6 = realistic.
+  typing_cps_min: 3
+  typing_cps_max: 6
+
+# --- Browser ---
+browser:
+  # Set false the first time you log in, so YOU can solve any captcha.
+  # After login, the session is saved and headless: true works.
+  headless: false
+  # Where the persistent browser profile is stored (cookies, login).
+  user_data_dir: data/browser_profile
+  # User agent. Leave default unless you know what you're doing.
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+
+# --- Runtime ---
+runtime:
+  # Path to the sqlite db that tracks which posts we've already seen/replied to.
+  db_path: data/state.db
+  # Log file path
+  log_path: logs/bot.log
