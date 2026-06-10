@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { RampStage } from "../src/config.js";
-import { safestStage, selectStage } from "../src/ramp.js";
+import { selectStage } from "../src/ramp.js";
 
 const stages: RampStage[] = [
   { name: "warmup", minAccountDays: 0, minKarma: 0, posting: false, dailyCap: 0, minGapMinutes: 360, maxGapMinutes: 600, lurkProbability: 0.85, upvoteProbability: 0.45 },
@@ -36,9 +36,5 @@ describe("selectStage", () => {
   it("never exceeds what the account qualifies for", () => {
     // 80 days, 600 karma → qualifies for steady (45d/500k) but not active (90d/2000k)
     expect(selectStage(stages, 80, 600).name).toBe("steady");
-  });
-
-  it("safestStage returns warmup", () => {
-    expect(safestStage(stages).name).toBe("warmup");
   });
 });

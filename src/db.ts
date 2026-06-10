@@ -31,8 +31,7 @@ CREATE TABLE IF NOT EXISTS posts (
   skipped_reason TEXT,
   intent INTEGER,
   removed INTEGER,
-  last_checked_ts INTEGER,
-  comment_score INTEGER
+  last_checked_ts INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_posts_commented_ts ON posts(commented_ts);
@@ -62,7 +61,6 @@ export class StateDb {
       "intent INTEGER",
       "removed INTEGER",
       "last_checked_ts INTEGER",
-      "comment_score INTEGER",
     ]) {
       try {
         this.db.exec(`ALTER TABLE posts ADD COLUMN ${col}`);
@@ -166,12 +164,12 @@ export class StateDb {
     return rows.map((r) => ({ id: String(r.post_id), url: String(r.url), draft: String(r.draft_comment) }));
   }
 
-  markCommentChecked(postId: string, removed: boolean, score: number | null): void {
+  markCommentChecked(postId: string, removed: boolean): void {
     this.db.prepare(`
       UPDATE posts
-      SET removed = ?, last_checked_ts = ?, comment_score = COALESCE(?, comment_score)
+      SET removed = ?, last_checked_ts = ?
       WHERE post_id = ?
-    `).run(removed ? 1 : 0, Math.floor(Date.now() / 1000), score, postId);
+    `).run(removed ? 1 : 0, Math.floor(Date.now() / 1000), postId);
   }
 
   /** Removal stats over comments checked within the window (for the throttle). */

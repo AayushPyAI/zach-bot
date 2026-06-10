@@ -17,8 +17,6 @@ const discoverySchema = z.object({
   minAgeMinutes: z.number().int().min(0).default(15),
   minBodyChars: z.number().int().min(0).default(120),
   keywords: z.array(z.string().min(1)).default([]),
-  visualMode: z.boolean().default(true),
-  openPostWhileReading: z.boolean().default(true),
 });
 
 const aiSchema = z.object({
@@ -136,8 +134,6 @@ const DEFAULT_RAMP_STAGES: RampStage[] = [
 
 const rampSchema = z.object({
   enabled: z.boolean().default(true),
-  // Use AI to sanity-check the chosen stage; can only recommend a SAFER stage.
-  aiReview: z.boolean().default(false),
   stages: z.array(rampStageSchema).min(1).default(DEFAULT_RAMP_STAGES),
 });
 

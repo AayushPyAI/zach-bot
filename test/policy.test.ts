@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
 import {
-  evaluateCandidate,
   evaluateContent,
   evaluatePostingGate,
   evaluateRemovalThrottle,
@@ -46,49 +45,6 @@ const discovery: AppConfig["discovery"] = {
   openPostWhileReading: true,
 };
 
-describe("evaluateCandidate", () => {
-  it("accepts a fresh, on-topic self post", () => {
-    expect(evaluateCandidate(makePost(), discovery, NOW)).toEqual({
-      ok: true,
-      reason: "keyword match",
-    });
-  });
-
-  it("rejects link posts", () => {
-    expect(evaluateCandidate(makePost({ isSelf: false }), discovery, NOW).ok).toBe(false);
-  });
-
-  it("rejects locked, archived, and nsfw posts", () => {
-    expect(evaluateCandidate(makePost({ locked: true }), discovery, NOW).reason).toBe("locked");
-    expect(evaluateCandidate(makePost({ archived: true }), discovery, NOW).reason).toBe("archived");
-    expect(evaluateCandidate(makePost({ over18: true }), discovery, NOW).reason).toBe("nsfw");
-  });
-
-  it("rejects posts that are too new or too old", () => {
-    expect(evaluateCandidate(makePost({ createdUtc: NOW - 60 }), discovery, NOW).reason).toBe("too new");
-    expect(
-      evaluateCandidate(makePost({ createdUtc: NOW - 13 * 3600 }), discovery, NOW).reason,
-    ).toBe("too old");
-  });
-
-  it("rejects bodies under the minimum length", () => {
-    expect(evaluateCandidate(makePost({ body: "short" }), discovery, NOW).reason).toBe(
-      "body too short",
-    );
-  });
-
-  it("rejects off-topic posts when keywords are configured", () => {
-    const offTopic = makePost({ title: "best pizza in town", body: "y".repeat(200) });
-    expect(evaluateCandidate(offTopic, discovery, NOW).reason).toBe("no keyword match");
-  });
-
-  it("accepts everything (length permitting) when no keywords are configured", () => {
-    const noKeywords = { ...discovery, keywords: [] };
-    const offTopic = makePost({ title: "best pizza in town", body: "y".repeat(200) });
-    expect(evaluateCandidate(offTopic, noKeywords, NOW).ok).toBe(true);
-  });
-});
-
 describe("evaluateStructural (feed-only, no body)", () => {
   it("passes a fresh self post even before its body is read", () => {
     const stub = makePost({ body: "" });
@@ -114,6 +70,12 @@ describe("evaluateContent (post-read)", () => {
 
   it("accepts an on-topic body of sufficient length", () => {
     expect(evaluateContent(makePost(), discovery).ok).toBe(true);
+  });
+
+  it("accepts any sufficiently long body when no keywords are configured", () => {
+    const noKeywords = { ...discovery, keywords: [] };
+    const offTopic = makePost({ title: "best pizza in town", body: "y".repeat(200) });
+    expect(evaluateContent(offTopic, noKeywords).ok).toBe(true);
   });
 
   it("uses the per-audience keyword override when provided", () => {

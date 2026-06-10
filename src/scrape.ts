@@ -6,10 +6,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const catalog = await buildCatalog(config);
   logger.info(
-    {
-      products: catalog.products.map((p) => ({ name: p.name, audience: p.audience })),
-      blogTopics: catalog.blogTopics.length,
-    },
+    { products: catalog.products.map((p) => ({ name: p.name, audience: p.audience })) },
     "Catalog built",
   );
 }

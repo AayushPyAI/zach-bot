@@ -46,8 +46,7 @@ export async function buildCatalog(config: AppConfig): Promise<ProductCatalog> {
   const catalog: ProductCatalog = {
     source: baseUrl,
     generatedAt: new Date().toISOString(),
-    products: products.products,
-    blogTopics: products.blogTopics,
+    products,
   };
 
   const resolved = path.resolve(catalogPath);
@@ -205,7 +204,7 @@ async function distill(
   config: AppConfig,
   pages: Array<{ url: string; title: string; text: string }>,
   audiences: string[],
-): Promise<{ products: CatalogProduct[]; blogTopics: string[] }> {
+): Promise<CatalogProduct[]> {
   const client = new OpenAI({ apiKey: config.openAiApiKey, timeout: 120_000, maxRetries: 2 });
 
   let corpus = "";
@@ -232,8 +231,7 @@ Return strict JSON:
       "topics": string[],
       "talkingPoints": string[]
     }
-  ],
-  "blogTopics": string[]
+  ]
 }
 
 Rules:
@@ -252,15 +250,15 @@ Rules:
   });
 
   const raw = response.choices[0]?.message.content ?? "{}";
-  let parsed: { products?: CatalogProduct[]; blogTopics?: string[] };
+  let parsed: { products?: CatalogProduct[] };
   try {
-    parsed = JSON.parse(raw) as { products?: CatalogProduct[]; blogTopics?: string[] };
+    parsed = JSON.parse(raw) as { products?: CatalogProduct[] };
   } catch (error) {
     logger.error({ error, raw }, "Catalog distillation returned invalid JSON");
-    return { products: [], blogTopics: [] };
+    return [];
   }
 
-  const products = (parsed.products ?? [])
+  return (parsed.products ?? [])
     .filter((p): p is CatalogProduct => Boolean(p && p.name))
     .map((p) => ({
       name: String(p.name).trim(),
@@ -269,6 +267,4 @@ Rules:
       topics: Array.isArray(p.topics) ? p.topics.map(String) : [],
       talkingPoints: Array.isArray(p.talkingPoints) ? p.talkingPoints.map(String) : [],
     }));
-
-  return { products, blogTopics: Array.isArray(parsed.blogTopics) ? parsed.blogTopics.map(String) : [] };
 }

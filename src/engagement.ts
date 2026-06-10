@@ -32,7 +32,7 @@ export async function recheckComments(
       const html = await browser.safePageHtml();
       const snippet = comment.draft.slice(0, 60).trim();
       const present = snippet.length > 0 && html.includes(snippet);
-      db.markCommentChecked(comment.id, !present, null);
+      db.markCommentChecked(comment.id, !present);
       if (!present) {
         logger.warn({ postId: comment.id, url: comment.url }, "Posted comment appears REMOVED");
       } else {

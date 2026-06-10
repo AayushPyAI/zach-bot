@@ -14,7 +14,7 @@ export class ProductKnowledge {
   private readonly byAudience = new Map<string, CatalogProduct[]>();
   private readonly byName = new Map<string, CatalogProduct>();
 
-  constructor(private readonly catalog: ProductCatalog | null) {
+  constructor(catalog: ProductCatalog | null) {
     for (const product of catalog?.products ?? []) {
       this.byName.set(product.name.toLowerCase(), product);
       const key = product.audience.toLowerCase();

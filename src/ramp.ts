@@ -18,10 +18,3 @@ export function selectStage(stages: RampStage[], ageDays: number, karma: number)
     return best;
   });
 }
-
-/** The single most conservative stage, used when account stats can't be read. */
-export function safestStage(stages: RampStage[]): RampStage {
-  return stages.reduce((safest, s) =>
-    s.minAccountDays + s.minKarma < safest.minAccountDays + safest.minKarma ? s : safest,
-  );
-}

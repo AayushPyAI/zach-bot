@@ -75,30 +75,6 @@ export function evaluateContent(
     : { ok: false, reason: "no keyword match" };
 }
 
-/**
- * Combined structural + content verdict. Convenient when the full post
- * (including body) is already in hand.
- */
-export function evaluateCandidate(
-  post: RedditPost,
-  discovery: AppConfig["discovery"],
-  nowSeconds: number,
-): CandidateReason {
-  const structural = evaluateStructural(post, discovery, nowSeconds);
-  if (!structural.ok) {
-    return structural;
-  }
-  return evaluateContent(post, discovery);
-}
-
-export function isCandidatePost(
-  post: RedditPost,
-  discovery: AppConfig["discovery"],
-  nowSeconds: number,
-): boolean {
-  return evaluateCandidate(post, discovery, nowSeconds).ok;
-}
-
 export interface RemovalThrottle {
   throttle: boolean;
   reason: string;

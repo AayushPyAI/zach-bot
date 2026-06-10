@@ -41,8 +41,6 @@ discovery:
   maxAgeHours: 12
   minAgeMinutes: 15
   minBodyChars: 140
-  visualMode: true
-  openPostWhileReading: true
   keywords:
     - will
     - estate
@@ -101,7 +99,6 @@ daemon:
 # decides the rest. Set enabled:false to ignore the ramp and use posting/* + CLI.
 ramp:
   enabled: true
-  aiReview: false
   stages:
     - { name: warmup,      minAccountDays: 0,   minKarma: 0,    posting: false, dailyCap: 0, minGapMinutes: 360, maxGapMinutes: 600, lurkProbability: 0.85, upvoteProbability: 0.45, promotionLevel: topical }
     # minKarma lowered to 0 so the current account (205d old, low karma) enters

@@ -42,7 +42,6 @@ export interface ProductCatalog {
   source: string;
   generatedAt: string;
   products: CatalogProduct[];
-  blogTopics: string[];
 }
 
 export interface StoredPost extends RedditPost {

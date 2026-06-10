@@ -15,7 +15,7 @@ function main(): void {
   // Open read-write so we can apply the same idempotent column migrations as the
   // main app — otherwise reporting on a DB created before these columns errors.
   const db = new Database(dbPath, { fileMustExist: true });
-  for (const col of ["intent INTEGER", "removed INTEGER", "last_checked_ts INTEGER", "comment_score INTEGER"]) {
+  for (const col of ["intent INTEGER", "removed INTEGER", "last_checked_ts INTEGER"]) {
     try {
       db.exec(`ALTER TABLE posts ADD COLUMN ${col}`);
     } catch {
