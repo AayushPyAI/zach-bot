@@ -119,13 +119,15 @@ def discover_posts(
     browser: RedditBrowser,
     subreddit: str,
     cfg: DiscoveryCfg,
+    sort: Optional[str] = None,
 ) -> List[Post]:
     """Return posts that pass cheap structural filters. AI scoring happens later."""
+    sort = sort or cfg.sort
     if cfg.visual_mode:
-        _visit_subreddit_visibly(browser, subreddit, cfg.sort)
+        _visit_subreddit_visibly(browser, subreddit, sort)
 
     try:
-        payload = _fetch_listing_json(browser, subreddit, cfg.sort, cfg.posts_per_subreddit)
+        payload = _fetch_listing_json(browser, subreddit, sort, cfg.posts_per_subreddit)
     except Exception as e:
         logger.error("Discovery failed for r/{}: {}", subreddit, e)
         return []

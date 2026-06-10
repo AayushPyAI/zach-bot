@@ -17,6 +17,7 @@ from __future__ import annotations
 import random
 import sys
 import time
+from datetime import datetime
 from typing import List, Tuple
 
 from loguru import logger
@@ -33,15 +34,56 @@ from .poster import post_comment
 def _eligible_to_post(cfg: Config, db: StateDB) -> Tuple[bool, str]:
     if cfg.posting.dry_run:
         return True, ""
-    posted_24h = db.comments_in_last_24h()
-    if posted_24h >= cfg.posting.daily_cap:
-        return False, f"daily cap reached ({posted_24h}/{cfg.posting.daily_cap})"
+    cap = cfg.posting.daily_cap
+    if cap > 0:
+        posted_24h = db.comments_in_last_24h()
+        if posted_24h >= cap:
+            return False, f"daily cap reached ({posted_24h}/{cap})"
     last_ts = db.last_comment_ts()
     if last_ts is not None:
         gap_minutes = (int(time.time()) - last_ts) / 60.0
-        if gap_minutes < cfg.posting.min_gap_minutes:
-            return False, f"min gap not met ({gap_minutes:.1f}m < {cfg.posting.min_gap_minutes}m)"
+        floor = cfg.posting.enforce_gap_minutes
+        if gap_minutes < floor:
+            return False, f"min gap not met ({gap_minutes:.1f}m < {floor}m)"
     return True, ""
+
+
+def _within_active_hours(cfg: Config) -> bool:
+    """Honor humanize.active_hours [start, end). Empty list = always active."""
+    hrs = cfg.humanize.active_hours
+    if not cfg.humanize.enabled or not hrs or len(hrs) != 2:
+        return True
+    start, end = hrs[0], hrs[1]
+    now_h = datetime.now().hour
+    if start <= end:
+        return start <= now_h < end
+    # Wrap-around window (e.g. 22 -> 6)
+    return now_h >= start or now_h < end
+
+
+def _subreddit_on_cooldown(cfg: Config, db: StateDB, subreddit: str) -> bool:
+    cd = cfg.humanize.per_subreddit_cooldown_minutes
+    if not cfg.humanize.enabled or cd <= 0 or cfg.posting.dry_run:
+        return False
+    last = db.last_comment_ts_for_subreddit(subreddit)
+    if last is None:
+        return False
+    mins = (int(time.time()) - last) / 60.0
+    return mins < cd
+
+
+def _maybe_lurk(cfg: Config, browser: RedditBrowser) -> None:
+    """At session start, casually browse a few unrelated subreddits."""
+    h = cfg.humanize
+    if not h.enabled or not h.lurk_subreddits:
+        return
+    if random.random() >= h.lurk_probability:
+        return
+    n = random.randint(max(1, h.lurk_min), max(h.lurk_min, h.lurk_max))
+    subs = random.sample(h.lurk_subreddits, k=min(n, len(h.lurk_subreddits)))
+    for sub in subs:
+        browser.lurk_subreddit(sub)
+        browser.try_upvote_current_page(probability=h.upvote_probability)
 
 
 def _row_to_post(row) -> Post:
@@ -65,8 +107,14 @@ def _row_to_post(row) -> Post:
 
 def _discover(cfg: Config, db: StateDB, browser: RedditBrowser) -> List[Post]:
     new_posts: List[Post] = []
-    for sub in cfg.subreddits:
-        posts = discover_posts(browser, sub, cfg.discovery)
+    # Shuffle subreddit order each run so the pattern isn't identical daily.
+    subs = list(cfg.subreddits)
+    if cfg.discovery.shuffle_subreddits:
+        random.shuffle(subs)
+    for sub in subs:
+        sort = cfg.discovery.pick_sort()  # random tab per sub (new/hot/rising)
+        logger.info("Scanning r/{} (sort={})", sub, sort)
+        posts = discover_posts(browser, sub, cfg.discovery, sort=sort)
         for p in posts:
             if db.has_seen(p.id):
                 continue
@@ -116,6 +164,9 @@ def _analyze_all(
         logger.info("[{}/{}] Reading post {} in r/{}: {}", i, total, p.id, p.subreddit, p.title[:80])
         # Visible: open this candidate on new reddit + scroll a little.
         browser.idle_browse(p.url)
+        # Sometimes upvote a post we're reading (real users vote).
+        if cfg.humanize.enabled:
+            browser.try_upvote_current_page(probability=cfg.humanize.upvote_probability)
 
         logger.info("[{}/{}] Sending to OpenAI for scoring...", i, total)
         try:
@@ -157,6 +208,22 @@ def _post_drafts(
             logger.info("Skipping {} - already attempted before.", post.id)
             continue
 
+        # Per-subreddit cooldown: don't hit the same sub repeatedly.
+        if _subreddit_on_cooldown(cfg, db, post.subreddit):
+            logger.info("Skipping {} - r/{} on cooldown.", post.id, post.subreddit)
+            continue
+
+        # Humans don't comment on EVERY good post - sometimes just read & move on.
+        if (
+            cfg.humanize.enabled
+            and not cfg.posting.dry_run
+            and random.random() < cfg.humanize.skip_good_post_probability
+        ):
+            logger.info("[human] Chose to read {} and move on (no comment).", post.id)
+            browser.idle_browse(post.url)
+            db.mark_skipped(post.id, "human-skip (read only)")
+            continue
+
         ok, why = _eligible_to_post(cfg, db)
         if not ok:
             logger.info("Stopping posting loop: {}", why)
@@ -176,7 +243,13 @@ def _post_drafts(
             continue
 
         try:
-            success = post_comment(browser, post, analysis.comment or "", cfg.posting)
+            success = post_comment(
+                browser,
+                post,
+                analysis.comment or "",
+                cfg.posting,
+                upvote_probability=cfg.humanize.upvote_probability if cfg.humanize.enabled else 0.0,
+            )
         except Exception as e:
             logger.error("Failed to post on {}: {}", post.id, e)
             db.mark_skipped(post.id, f"post error: {e}")
@@ -184,10 +257,12 @@ def _post_drafts(
 
         if success:
             db.mark_commented(post.id, dry_run=False)
-            wait_minutes = cfg.posting.min_gap_minutes + random.uniform(
-                0, cfg.posting.jitter_minutes
+            base_gap = cfg.posting.pick_gap_minutes()
+            wait_minutes = base_gap + random.uniform(0, cfg.posting.jitter_minutes)
+            logger.info(
+                "Sleeping {:.1f} min before next post (base {:.1f} + jitter).",
+                wait_minutes, base_gap,
             )
-            logger.info("Sleeping {:.1f} minutes before next post...", wait_minutes)
             time.sleep(wait_minutes * 60)
         else:
             db.mark_skipped(post.id, "post not confirmed")
@@ -195,6 +270,24 @@ def _post_drafts(
 
 def run_once(cfg: Config) -> None:
     db = StateDB(cfg.db_path_abs)
+
+    # --- Humanize gates (only when actually posting) ---
+    if cfg.humanize.enabled and not cfg.posting.dry_run:
+        if not _within_active_hours(cfg):
+            logger.info(
+                "Outside active hours {} (now {}h). Doing nothing this run.",
+                cfg.humanize.active_hours, datetime.now().hour,
+            )
+            db.close()
+            return
+        if random.random() < cfg.humanize.skip_day_probability:
+            logger.info(
+                "[human] Random skip-day triggered ({:.0%} chance). No activity this run.",
+                cfg.humanize.skip_day_probability,
+            )
+            db.close()
+            return
+
     analyzer = Analyzer(cfg.openai_api_key, cfg.openai_model, cfg.ai)
 
     browser = RedditBrowser(
@@ -208,6 +301,8 @@ def run_once(cfg: Config) -> None:
     # Single browser session for the whole run - everything visible.
     with browser.session():
         browser.login()
+        # Warm up the session by lurking unrelated subs first (looks human).
+        _maybe_lurk(cfg, browser)
         newly_found = _discover(cfg, db, browser)
         logger.info("Discovery done.")
 

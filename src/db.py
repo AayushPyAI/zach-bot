@@ -153,5 +153,14 @@ class StateDB:
         row = cur.fetchone()
         return int(row[0]) if row and row[0] is not None else None
 
+    def last_comment_ts_for_subreddit(self, subreddit: str) -> Optional[int]:
+        cur = self._conn.execute(
+            """SELECT MAX(commented_ts) FROM posts
+               WHERE commented = 1 AND dry_run = 0 AND subreddit = ?""",
+            (subreddit,),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
     def close(self) -> None:
         self._conn.close()

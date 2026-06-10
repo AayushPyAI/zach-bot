@@ -12,6 +12,7 @@ This module is link-free by design. Adding product links should be done LATER
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import dataclass
 from typing import Optional
 
@@ -21,6 +22,28 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from .config import AICfg
 from .discover import Post
+
+
+# Rotating style hints so every comment doesn't share the same fingerprint.
+# One is injected at random per comment.
+_STYLE_HINTS = [
+    "Write it as one short flowing paragraph.",
+    "Lead with the single most important point, then one quick caveat.",
+    "Keep it casual and brief, like a quick reply between tasks.",
+    "Ask a short clarifying question first, then give your take.",
+    "Share it as 'what I'd do in your shoes' without being preachy.",
+    "Be direct and a little blunt, but still helpful.",
+    "Mention one practical next step they can take this week.",
+    "Acknowledge the hard part in a sentence, then give the tip.",
+]
+
+# Rotating length targets (chars) within the configured min/max, so replies
+# vary in size rather than all hugging the same length.
+def _pick_length_window(min_chars: int, max_chars: int) -> tuple[int, int]:
+    span = max(40, max_chars - min_chars)
+    lo = min_chars + random.randint(0, span // 2)
+    hi = min(max_chars, lo + random.randint(span // 3, span))
+    return lo, hi
 
 
 @dataclass
@@ -75,10 +98,10 @@ class Analyzer:
         )
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=20))
-    def _call(self, user_msg: str) -> dict:
+    def _call(self, user_msg: str, temperature: float) -> dict:
         resp = self.client.chat.completions.create(
             model=self.model,
-            temperature=0.7,
+            temperature=temperature,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": self.system_prompt},
@@ -89,13 +112,21 @@ class Analyzer:
         return json.loads(content)
 
     def analyze(self, post: Post) -> Analysis:
+        # Per-comment variety: random style hint, length window, and temperature
+        # so the account's comment history doesn't share a single fingerprint.
+        style = random.choice(_STYLE_HINTS)
+        lo, hi = _pick_length_window(self.cfg.min_comment_chars, self.cfg.max_comment_chars)
+        temperature = round(random.uniform(0.6, 0.95), 2)
+
         user_msg = (
             f"Subreddit: r/{post.subreddit}\n"
             f"Title: {post.title}\n\n"
-            f"Body:\n{post.body[:4000]}"
+            f"Body:\n{post.body[:4000]}\n\n"
+            f"Style for THIS reply: {style}\n"
+            f"Target length for THIS reply: roughly {lo}-{hi} characters."
         )
         try:
-            data = self._call(user_msg)
+            data = self._call(user_msg, temperature)
         except Exception as e:
             logger.error("AI call failed for post {}: {}", post.id, e)
             return Analysis(relevance=0, reason=f"AI error: {e}", comment=None)

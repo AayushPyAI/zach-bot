@@ -1,21 +1,18 @@
 """Post a comment on a Reddit post via the logged-in browser.
 
-Strategy:
-  - Everything visible to the user uses NEW reddit (www.reddit.com).
-  - The actual comment submission switches to OLD reddit for ~5 seconds
-    because old.reddit's plain <textarea> + form is the most reliable way
-    to post via Playwright. New reddit uses shadow-DOM web components that
-    break across UI redesigns.
-  - Cookies are valid across *.reddit.com, so this switch is invisible to
-    Reddit (same session, same account).
+`posting.use_old_reddit` in config.yaml controls which UI is used:
+  - true  -> old.reddit.com (plain textarea, most reliable)
+  - false -> www.reddit.com (more human; optional fallback to old)
 """
 from __future__ import annotations
 
 import random
 import time
+from typing import Optional
 from urllib.parse import urlparse
 
 from loguru import logger
+from playwright.sync_api import Locator
 
 from .browser import RedditBrowser
 from .config import PostingCfg
@@ -40,68 +37,202 @@ def post_comment(
     post: Post,
     text: str,
     cfg: PostingCfg,
+    upvote_probability: float = 0.0,
 ) -> bool:
     """Returns True on apparent success, False otherwise."""
+    if cfg.use_old_reddit:
+        return _post_old_reddit(browser, post, text, cfg, upvote_probability)
 
-    # Step 1: Open the post on NEW reddit so the user sees the modern UI.
-    new_url = _to_new_reddit(post.url)
-    logger.info("Opening post (new reddit, visible): {}", new_url)
-    try:
-        browser.page.goto(new_url, wait_until="domcontentloaded", timeout=20_000)
-        browser._human_pause(2.0, 3.5)
-        browser.human_scroll(times=random.randint(1, 3))
-    except Exception as e:
-        logger.debug("New reddit preview navigation issue: {}", e)
+    ok = _post_new_reddit(browser, post, text, cfg, upvote_probability)
+    if ok:
+        return True
+    if cfg.fallback_to_old_reddit:
+        logger.warning("New-reddit post failed; falling back to old.reddit...")
+        return _post_old_reddit(browser, post, text, cfg, upvote_probability)
+    return False
 
-    # Step 2: Switch to OLD reddit for the actual posting (reliable form).
+
+def _open_and_read(
+    browser: RedditBrowser,
+    url: str,
+    upvote_probability: float,
+) -> None:
+    browser.page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+    browser._human_pause(2.0, 3.5)
+    browser.human_scroll(times=random.randint(2, 4))
+    if upvote_probability > 0:
+        browser.try_upvote_current_page(probability=upvote_probability)
+
+
+def _post_old_reddit(
+    browser: RedditBrowser,
+    post: Post,
+    text: str,
+    cfg: PostingCfg,
+    upvote_probability: float,
+) -> bool:
     target = _to_old_reddit(post.url)
-    logger.info("Switching to old reddit for the comment submit: {}", target)
-    browser.page.goto(target, wait_until="domcontentloaded")
-    browser._human_pause(1.5, 3.0)
-    browser.human_scroll(times=random.randint(1, 2))
+    logger.info("Opening post to comment (old reddit): {}", target)
+    _open_and_read(browser, target, upvote_probability)
 
-    # The top-level comment textarea on old.reddit is name="text" inside
-    # the .commentarea > .usertext form. We pick the FIRST one (top-level).
-    textarea = browser.page.locator(".commentarea form.usertext textarea[name='text']").first
+    textarea = browser.page.locator(
+        ".commentarea form.usertext textarea[name='text']"
+    ).first
     try:
         textarea.wait_for(state="visible", timeout=15_000)
     except Exception:
-        # Box may be hidden until we click "reply". Old reddit usually shows it
-        # immediately, but fall back if not.
-        logger.warning("Comment textarea not visible directly; checking page state.")
+        logger.warning("Old-reddit comment box not visible.")
         if "You must be logged in" in browser.page.content():
-            raise RuntimeError("Session expired - please re-login (delete data/browser_profile).")
+            raise RuntimeError(
+                "Session expired - please re-login (delete data/browser_profile)."
+            )
         return False
 
+    return _type_submit_confirm(
+        browser, textarea, text, cfg, snippet_check_in_page=True
+    )
+
+
+def _post_new_reddit(
+    browser: RedditBrowser,
+    post: Post,
+    text: str,
+    cfg: PostingCfg,
+    upvote_probability: float,
+) -> bool:
+    target = _to_new_reddit(post.url)
+    logger.info("Opening post to comment (new reddit): {}", target)
+    _open_and_read(browser, target, upvote_probability)
+
+    composer = _find_new_reddit_composer(browser)
+    if composer is None:
+        logger.warning("New-reddit comment composer not found.")
+        return False
+
+    return _type_submit_confirm(
+        browser, composer, text, cfg, snippet_check_in_page=True
+    )
+
+
+def _find_new_reddit_composer(browser: RedditBrowser) -> Optional[Locator]:
+    """Best-effort: open the top-level comment box on new reddit."""
+    page = browser.page
+
+    # Sometimes the composer is collapsed behind a placeholder / button.
+    for sel in [
+        "textarea[placeholder*='comment' i]",
+        "textarea[placeholder*='Add a comment' i]",
+        "textarea[aria-label*='comment' i]",
+        "div[contenteditable='true'][role='textbox']",
+        "div[contenteditable='true']",
+        "faceplate-textarea-input textarea",
+        "shreddit-composer textarea",
+    ]:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() and loc.is_visible():
+                return loc
+        except Exception:
+            continue
+
+    # Click triggers that expand the composer.
+    for sel in [
+        "textarea[placeholder*='comment' i]",
+        "div[contenteditable='true']",
+        "button:has-text('Add a comment')",
+        "button:has-text('Join the conversation')",
+        "[data-testid='comment-composer']",
+    ]:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() and loc.is_visible():
+                loc.click()
+                browser._human_pause(0.8, 1.6)
+                break
+        except Exception:
+            continue
+
+    # Re-scan after click.
+    for sel in [
+        "textarea[placeholder*='comment' i]",
+        "textarea[aria-label*='comment' i]",
+        "div[contenteditable='true'][role='textbox']",
+        "div[contenteditable='true']",
+        "faceplate-textarea-input textarea",
+        "shreddit-composer textarea",
+    ]:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() and loc.is_visible():
+                return loc
+        except Exception:
+            continue
+
+    return None
+
+
+def _find_submit_button(browser: RedditBrowser, on_old: bool) -> Optional[Locator]:
+    page = browser.page
+    if on_old:
+        selectors = [
+            ".commentarea form.usertext button.save",
+            ".commentarea form.usertext button[type='submit']",
+        ]
+    else:
+        selectors = [
+            "button:has-text('Comment')",
+            "button:has-text('Reply')",
+            "button[type='submit']:has-text('Comment')",
+            "shreddit-composer button[type='submit']",
+            "faceplate-tracker[noun='comment'] button",
+        ]
+    for sel in selectors:
+        try:
+            btn = page.locator(sel).first
+            if btn.count() and btn.is_visible() and btn.is_enabled():
+                return btn
+        except Exception:
+            continue
+    return None
+
+
+def _type_submit_confirm(
+    browser: RedditBrowser,
+    field: Locator,
+    text: str,
+    cfg: PostingCfg,
+    snippet_check_in_page: bool,
+) -> bool:
+    try:
+        field.click()
+        browser._human_pause(0.8, 2.0)
+    except Exception:
+        pass
+
     browser.human_type_in_textarea(
-        textarea,
+        field,
         text,
         cps_min=cfg.typing_cps_min,
         cps_max=cfg.typing_cps_max,
     )
-    browser._human_pause(1.0, 2.5)
+    browser._human_pause(1.5, 3.5)
 
-    submit_btn = browser.page.locator(
-        ".commentarea form.usertext button.save, .commentarea form.usertext button[type='submit']"
-    ).first
-    if submit_btn.count() == 0 or not submit_btn.is_visible():
+    on_old = "old.reddit.com" in browser.page.url
+    submit_btn = _find_submit_button(browser, on_old=on_old)
+    if submit_btn is None:
         logger.error("Submit button not found")
         return False
 
     submit_btn.click()
     logger.info("Submitted comment - waiting for confirmation...")
 
-    # Wait up to 45s for one of three outcomes:
-    #   - Our text appears in the comment tree (success)
-    #   - A REAL error message appears (failure)
-    #   - Timeout (unknown - tell user to check manually)
     deadline = time.time() + 45
     snippet = text[:60].strip()
     last_status = ""
 
     while time.time() < deadline:
         try:
-            current = textarea.input_value(timeout=2000)
+            current = field.input_value(timeout=2000)
         except Exception:
             current = ""
 
@@ -111,12 +242,16 @@ def post_comment(
         except Exception:
             pass
 
-        # Success: textarea cleared AND our text is in the visible page.
-        if current == "" and snippet and snippet in page_text:
-            logger.success("Comment appears posted on {}", post.id)
-            return True
+        if snippet_check_in_page and snippet and snippet in page_text:
+            # Old reddit: cleared box is a strong signal. New reddit: text in page is enough.
+            if on_old:
+                if current == "":
+                    logger.success("Comment appears posted.")
+                    return True
+            else:
+                logger.success("Comment appears posted (new reddit).")
+                return True
 
-        # Check for a REAL error (ignore status text like 'submitting...').
         err = _read_form_error(browser)
         if err and err.lower() != last_status.lower():
             last_status = err
@@ -127,24 +262,20 @@ def post_comment(
 
         time.sleep(2.0)
 
-    # Timed out. Could still have posted - check the URL and page text once more.
     try:
         page_text = browser.page.content()
         if snippet and snippet in page_text:
-            logger.success("Comment appears posted on {} (detected late).", post.id)
+            logger.success("Comment appears posted (detected late).")
             return True
     except Exception:
         pass
 
     logger.warning(
-        "Could not confirm comment posted within 45s (post {}). "
-        "Open the URL in your browser and check manually.",
-        post.id,
+        "Could not confirm comment posted within 45s. Check the post manually."
     )
     return False
 
 
-# Words that mean "in progress", not a real failure.
 _BENIGN_STATUS = (
     "submitting",
     "saving",
@@ -152,7 +283,6 @@ _BENIGN_STATUS = (
     "please wait",
 )
 
-# Words/phrases that mean a real refusal.
 _REAL_ERROR_PHRASES = (
     "you are doing that too much",
     "try again in",
@@ -182,12 +312,6 @@ def _is_real_error(text: str) -> bool:
 
 
 def _read_form_error(browser) -> str:
-    """Scrape any visible error message Reddit displayed under/near the form.
-
-    Old.reddit shows errors inside `.error`, `.status`, `.ratelimit` elements
-    in the comment form, and sometimes as a flashing message at the top.
-    Returns the trimmed text of the FIRST one we can find, or "" if none.
-    """
     page = browser.page
     selectors = [
         ".commentarea form.usertext .error",
@@ -208,5 +332,4 @@ def _read_form_error(browser) -> str:
                     return txt[:300]
         except Exception:
             continue
-
     return ""

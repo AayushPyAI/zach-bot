@@ -52,20 +52,90 @@ class RedditBrowser:
             user_agent=self.user_agent,
             viewport={"width": 1366, "height": 850},
             locale="en-US",
+            timezone_id="America/New_York",
+            # Reduce the obvious "controlled by automation" surface.
+            ignore_default_args=["--enable-automation"],
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
+                "--disable-infobars",
+                "--start-maximized",
+                "--disable-features=IsolateOrigins,site-per-process",
             ],
         )
-        # Light stealth tweak: hide webdriver flag.
-        self._ctx.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-        )
+
+        # Try the playwright-stealth package if it's installed (best effort).
+        self._apply_stealth_package()
+
+        # Comprehensive fingerprint patches, applied to every page/frame.
+        self._ctx.add_init_script(self._STEALTH_JS)
+
         self._page = (
             self._ctx.pages[0] if self._ctx.pages else self._ctx.new_page()
         )
         self._page.set_default_timeout(30_000)
+
+    def _apply_stealth_package(self) -> None:
+        """Use playwright-stealth if available. API differs across versions,
+        so we try the known entry points and silently skip if none work."""
+        try:
+            import playwright_stealth as _ps  # type: ignore
+        except Exception:
+            logger.debug("playwright-stealth not installed; using built-in patches only.")
+            return
+        # Newer versions: Stealth().apply_stealth_sync(context/page)
+        try:
+            stealth = getattr(_ps, "Stealth", None)
+            if stealth is not None:
+                inst = stealth()
+                for meth in ("apply_stealth_sync",):
+                    fn = getattr(inst, meth, None)
+                    if fn:
+                        try:
+                            fn(self._ctx)
+                            logger.info("Applied playwright-stealth (context).")
+                            return
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        logger.debug("playwright-stealth present but no compatible API; built-in patches only.")
+
+    # Injected into every document before any site script runs.
+    _STEALTH_JS = """
+    // webdriver flag
+    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+    // languages
+    Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+    // plugins (non-empty looks more real)
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => [1, 2, 3, 4, 5].map(i => ({name: 'Plugin ' + i})),
+    });
+    // hardware hints
+    try { Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8}); } catch (e) {}
+    try { Object.defineProperty(navigator, 'deviceMemory', {get: () => 8}); } catch (e) {}
+    // chrome runtime stub
+    window.chrome = window.chrome || { runtime: {} };
+    // permissions query (notifications shouldn't report 'denied' headlessly)
+    try {
+      const orig = window.navigator.permissions.query;
+      window.navigator.permissions.query = (p) => (
+        p && p.name === 'notifications'
+          ? Promise.resolve({ state: Notification.permission })
+          : orig(p)
+      );
+    } catch (e) {}
+    // WebGL vendor/renderer spoof (avoid SwiftShader/headless tells)
+    try {
+      const getParam = WebGLRenderingContext.prototype.getParameter;
+      WebGLRenderingContext.prototype.getParameter = function (p) {
+        if (p === 37445) return 'Intel Inc.';            // UNMASKED_VENDOR_WEBGL
+        if (p === 37446) return 'Intel Iris OpenGL Engine'; // UNMASKED_RENDERER_WEBGL
+        return getParam.call(this, p);
+      };
+    } catch (e) {}
+    """
 
     def close(self) -> None:
         """Shut down Playwright without raising if the user closed the window."""
@@ -349,13 +419,50 @@ class RedditBrowser:
         for ch in text:
             locator.type(ch, delay=random.uniform(40, 130))
 
+    # Keys physically adjacent on a QWERTY keyboard (for realistic typos).
+    _ADJACENT = {
+        "a": "sqz", "b": "vghn", "c": "xdfv", "d": "serfcx", "e": "wrsdf",
+        "f": "drtgvc", "g": "ftyhbv", "h": "gyujnb", "i": "ujko", "j": "huikmn",
+        "k": "jiolm", "l": "kop", "m": "njk", "n": "bhjm", "o": "iklp",
+        "p": "ol", "q": "wa", "r": "edft", "s": "awedxz", "t": "rfgy",
+        "u": "yhji", "v": "cfgb", "w": "qase", "x": "zsdc", "y": "tghu",
+        "z": "asx",
+    }
+
     def human_type_in_textarea(self, locator, text: str, cps_min: float, cps_max: float) -> None:
-        """Type into a comment box at a configurable WPM-ish speed."""
+        """Type into a comment box like a real person: variable speed, the
+        occasional typo that gets backspaced and corrected, and short pauses
+        at natural break points (after sentences / commas)."""
         locator.click()
-        for ch in text:
-            cps = random.uniform(cps_min, cps_max)
-            delay_ms = max(20.0, 1000.0 / cps + random.uniform(-30, 60))
-            locator.type(ch, delay=delay_ms)
+        self._human_pause(0.3, 0.9)
+
+        for idx, ch in enumerate(text):
+            # Occasional typo on letters (~4%): type a wrong adjacent key,
+            # pause as if noticing, backspace, then continue with the right one.
+            lower = ch.lower()
+            if lower in self._ADJACENT and random.random() < 0.04:
+                wrong = random.choice(self._ADJACENT[lower])
+                if ch.isupper():
+                    wrong = wrong.upper()
+                locator.type(wrong, delay=self._key_delay(cps_min, cps_max))
+                self._human_pause(0.15, 0.5)
+                locator.press("Backspace")
+                self._human_pause(0.1, 0.3)
+
+            locator.type(ch, delay=self._key_delay(cps_min, cps_max))
+
+            # Natural thinking pauses after sentence/clause boundaries.
+            if ch in ".!?" and random.random() < 0.7:
+                self._human_pause(0.4, 1.3)
+            elif ch == "," and random.random() < 0.4:
+                self._human_pause(0.2, 0.7)
+            # Rare random mid-word hesitation.
+            elif random.random() < 0.015:
+                self._human_pause(0.3, 1.0)
+
+    def _key_delay(self, cps_min: float, cps_max: float) -> float:
+        cps = random.uniform(cps_min, cps_max)
+        return max(20.0, 1000.0 / cps + random.uniform(-30, 60))
 
     def human_scroll(self, times: int = 2) -> None:
         for _ in range(times):
@@ -384,3 +491,50 @@ class RedditBrowser:
                 )
         except Exception as e:
             logger.debug("idle_browse hiccup (ignored): {}", e)
+
+    # --------------------------------------------------------- behavior mix
+
+    def lurk_subreddit(self, subreddit: str, dwell_min: float = 4.0, dwell_max: float = 12.0) -> None:
+        """Casually browse an unrelated subreddit feed: scroll, pause, maybe
+        upvote. Makes the account look like a real person, not a comment bot."""
+        url = f"https://www.reddit.com/r/{subreddit}/"
+        logger.info("[human] Lurking r/{}", subreddit)
+        try:
+            self.page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+        except Exception as e:
+            logger.debug("[human] lurk navigation issue: {}", e)
+            return
+        self._human_pause(1.5, 3.0)
+        dwell = random.uniform(dwell_min, dwell_max)
+        end = time.time() + dwell
+        while time.time() < end:
+            self.page.mouse.wheel(0, random.randint(400, 1100))
+            self._human_pause(0.8, 2.2)
+            if random.random() < 0.15:
+                # scroll back up a touch
+                self.page.mouse.wheel(0, -random.randint(200, 600))
+                self._human_pause(0.5, 1.2)
+
+    def try_upvote_current_page(self, probability: float = 0.45) -> bool:
+        """With some probability, click an upvote button on the current page.
+        Works on new reddit (aria-label) and old reddit (.arrow.up). Best-effort;
+        never raises. Returns True if it clicked something."""
+        if random.random() >= probability:
+            return False
+        candidates = [
+            "button[aria-label='upvote']",
+            "button[aria-label='Upvote']",
+            "[data-testid='upvote-button']",
+            "div.arrow.up",  # old reddit
+        ]
+        for sel in candidates:
+            try:
+                loc = self.page.locator(sel).first
+                if loc.count() and loc.is_visible():
+                    loc.click(timeout=3000)
+                    logger.info("[human] Upvoted something ({}).", sel)
+                    self._human_pause(0.5, 1.5)
+                    return True
+            except Exception:
+                continue
+        return False

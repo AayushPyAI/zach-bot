@@ -11,8 +11,16 @@ subreddits:
 
 # --- Post discovery ---
 discovery:
-  # Sort tab on subreddit: "new" | "hot" | "rising"
+  # Fallback sort tab if rotation is empty: "new" | "hot" | "rising"
   sort: new
+  # A sort is picked RANDOMLY from this list per subreddit each run (looks
+  # less robotic). Set to [] to always use `sort` above.
+  sort_rotation:
+    - new
+    - hot
+    - rising
+  # Shuffle the order subreddits are scanned each run.
+  shuffle_subreddits: true
   # How many recent posts to fetch from each subreddit per run
   posts_per_subreddit: 15
   # Skip posts older than this (hours). Engaging on stale posts looks bot-like.
@@ -68,15 +76,54 @@ ai:
 posting:
   # If true, the bot will only DRAFT comments and log them - it will NOT post.
   dry_run: false
-  # Max comments to post per 24h window (across ALL subreddits combined).
-  daily_cap: 1
-  # Minimum minutes between two posted comments.
-  min_gap_minutes: 180
-  # Random extra delay added on top (minutes). Real humans aren't periodic.
+  # Max comments per 24h. Set to 0 for no limit (only min_gap + jitter apply).
+  daily_cap: 0
+  # Base gap between comments is RANDOM in this range (minutes) - not fixed.
+  # Each cycle the bot picks a fresh value between these two numbers.
+  min_gap_min_minutes: 150
+  min_gap_max_minutes: 320
+  # Extra random delay added ON TOP of the base gap (minutes).
   jitter_minutes: 60
   # Simulated typing speed (chars per second). Range. ~3-6 = realistic.
   typing_cps_min: 3
   typing_cps_max: 6
+  # true  = post comments on old.reddit.com (reliable, slight bot tell)
+  # false = post on www.reddit.com (more human, can break if Reddit changes UI)
+  use_old_reddit: true
+  # If new-reddit posting fails, automatically retry on old.reddit
+  fallback_to_old_reddit: true
+
+# --- Humanize: make the whole session look like a real person ---
+humanize:
+  # Master switch for all the behaviors below.
+  enabled: true
+
+  # At session start, casually browse 1-2 unrelated subreddits (lurking),
+  # so the account isn't "only ever commenting in 3 niche subs".
+  lurk_probability: 0.6
+  lurk_subreddits:
+    - news
+    - todayilearned
+    - mildlyinteresting
+    - AskReddit
+  lurk_min: 1
+  lurk_max: 2
+
+  # While reading a post/feed, sometimes upvote something (real users vote).
+  upvote_probability: 0.45
+
+  # Even when a draft is good, occasionally just read and move on (don't
+  # comment on EVERY good post - humans don't).
+  skip_good_post_probability: 0.15
+
+  # Random chance the whole run does nothing today (humans aren't daily-robots).
+  skip_day_probability: 0.15
+
+  # Only operate between these local hours [start, end). [] = any time.
+  active_hours: [8, 23]
+
+  # Never comment in the same subreddit twice within this many minutes.
+  per_subreddit_cooldown_minutes: 360
 
 # --- Browser ---
 browser:
