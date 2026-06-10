@@ -28,7 +28,11 @@ CREATE TABLE IF NOT EXISTS posts (
   commented INTEGER NOT NULL DEFAULT 0,
   commented_ts INTEGER,
   dry_run INTEGER NOT NULL DEFAULT 0,
-  skipped_reason TEXT
+  skipped_reason TEXT,
+  intent INTEGER,
+  removed INTEGER,
+  last_checked_ts INTEGER,
+  comment_score INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_posts_commented_ts ON posts(commented_ts);
@@ -53,6 +57,19 @@ export class StateDb {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     this.db.exec(schema);
+    // Idempotent migrations for DBs created before these columns existed.
+    for (const col of [
+      "intent INTEGER",
+      "removed INTEGER",
+      "last_checked_ts INTEGER",
+      "comment_score INTEGER",
+    ]) {
+      try {
+        this.db.exec(`ALTER TABLE posts ADD COLUMN ${col}`);
+      } catch {
+        // Column already exists — fine.
+      }
+    }
   }
 
   close(): void {
@@ -129,9 +146,45 @@ export class StateDb {
   recordAnalysis(postId: string, analysis: AnalysisResult): void {
     this.db.prepare(`
       UPDATE posts
-      SET relevance = ?, reason = ?, draft_comment = ?
+      SET relevance = ?, intent = ?, reason = ?, draft_comment = ?
       WHERE post_id = ?
-    `).run(analysis.relevance, analysis.reason, analysis.draftComment, postId);
+    `).run(analysis.relevance, analysis.intent, analysis.reason, analysis.draftComment, postId);
+  }
+
+  /** Live comments posted within the window that are due for a removal re-check. */
+  commentsToRecheck(withinDays: number, limit: number): Array<{ id: string; url: string; draft: string }> {
+    const cutoff = Math.floor(Date.now() / 1000) - withinDays * 86_400;
+    const rows = this.db.prepare(`
+      SELECT post_id, url, draft_comment
+      FROM posts
+      WHERE commented = 1 AND dry_run = 0 AND commented_ts >= ?
+        AND (removed IS NULL OR removed = 0)
+        AND draft_comment IS NOT NULL
+      ORDER BY last_checked_ts ASC NULLS FIRST
+      LIMIT ?
+    `).all(cutoff, limit) as Array<Record<string, unknown>>;
+    return rows.map((r) => ({ id: String(r.post_id), url: String(r.url), draft: String(r.draft_comment) }));
+  }
+
+  markCommentChecked(postId: string, removed: boolean, score: number | null): void {
+    this.db.prepare(`
+      UPDATE posts
+      SET removed = ?, last_checked_ts = ?, comment_score = COALESCE(?, comment_score)
+      WHERE post_id = ?
+    `).run(removed ? 1 : 0, Math.floor(Date.now() / 1000), score, postId);
+  }
+
+  /** Removal stats over comments checked within the window (for the throttle). */
+  removalStats(withinDays: number): { checked: number; removed: number } {
+    const cutoff = Math.floor(Date.now() / 1000) - withinDays * 86_400;
+    const row = this.db.prepare(`
+      SELECT
+        SUM(CASE WHEN removed IS NOT NULL THEN 1 ELSE 0 END) AS checked,
+        SUM(CASE WHEN removed = 1 THEN 1 ELSE 0 END) AS removed
+      FROM posts
+      WHERE commented = 1 AND dry_run = 0 AND commented_ts >= ?
+    `).get(cutoff) as { checked: number | null; removed: number | null };
+    return { checked: row.checked ?? 0, removed: row.removed ?? 0 };
   }
 
   markSkipped(postId: string, reason: string): void {
@@ -203,6 +256,7 @@ function mapStoredPost(row: Record<string, unknown>): StoredPost {
     isSelf: Number(row.is_self) === 1,
     firstSeenTs: Number(row.first_seen_ts),
     relevance: row.relevance === null ? null : Number(row.relevance),
+    intent: row.intent === null || row.intent === undefined ? null : Number(row.intent),
     reason: row.reason === null ? null : String(row.reason),
     draftComment: row.draft_comment === null ? null : String(row.draft_comment),
     commented: Number(row.commented) === 1,

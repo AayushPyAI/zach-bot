@@ -100,6 +100,37 @@ subreddit and feeds the matching product's talking points to the model as
 and never includes a URL**. That keeps it helpful and ban-resistant while still
 steering toward the right product topic for the right audience.
 
+## Marketing logic (conversion + self-protection)
+
+Grounded in current Reddit-marketing best practice (value-first, the 9:1 rule,
+build karma before promoting):
+
+- **Buying-intent scoring** — every post gets an `intent` score (0–10) for how
+  actively the author is seeking advice/recommendations. Drafts are ranked by
+  `relevance + intentWeight × intent`, so high-intent threads (someone literally
+  asking "what do you recommend?") get commented on first.
+- **Quality gate** — the model self-rates each draft's value (`quality`, 0–10);
+  drafts below `ai.minQuality` are dropped as filler. Protects karma and keeps
+  the "value" contributions genuinely valuable.
+- **Promotion follows maturity** — the active ramp stage sets the promotion
+  level: young accounts stay `topical` (pure value, no brand); only mature,
+  trusted stages use `soft_brand`. Per-audience `allowBrand` further blocks brand
+  mentions in subreddits that forbid self-promotion.
+- **Removal-detection feedback loop** — recently posted comments are re-checked
+  each session (`recheck`); if Reddit is removing too many (rate ≥
+  `removalRateThreshold` over `minSample`), the bot **auto-backs-off to
+  draft-only** that run. Turns "comments getting removed" into an automatic brake.
+- **Reporting** — `npm run report` prints the funnel (seen → analyzed → drafted →
+  posted), removal rate, intent/relevance averages, per-subreddit breakdown, and
+  account growth from the snapshots.
+
+### Marketing work that lives outside this bot
+To actually grow sales end-to-end, pair the bot with: SEO/content (repurpose the
+bot's best answers into site articles), a UTM-tagged link in the account's
+**profile bio** (never in comments) + a Reddit pixel/Conversions API on the site
+for attribution (use a 60–90 day window), email capture + nurture, and optionally
+Reddit Ads/PPC. These are off-repo and not automated here.
+
 ## Account-maturity ramp (safety + growth, automatic)
 
 The bot scales its own activity to the account's maturity so a young account

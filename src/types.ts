@@ -19,6 +19,10 @@ export interface RedditPost {
 
 export interface AnalysisResult {
   relevance: number;
+  /** 0-10: how strongly the post is actively seeking advice/recommendations (buying intent). */
+  intent: number;
+  /** 0-10: the model's self-rating of how genuinely valuable/specific the drafted reply is. */
+  quality: number;
   reason: string;
   draftComment: string | null;
 }
@@ -44,6 +48,7 @@ export interface ProductCatalog {
 export interface StoredPost extends RedditPost {
   firstSeenTs: number;
   relevance: number | null;
+  intent: number | null;
   reason: string | null;
   draftComment: string | null;
   commented: boolean;

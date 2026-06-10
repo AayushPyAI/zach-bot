@@ -4,13 +4,15 @@ import { fetchAccountStats } from "./account.js";
 import { AppConfig, AudienceGroup } from "./config.js";
 import { publishComment } from "./comment-publisher.js";
 import { StateDb } from "./db.js";
+import { recheckComments } from "./engagement.js";
 import { logger } from "./logger.js";
-import { OpenAiAnalyzer } from "./openai-analyzer.js";
+import { OpenAiAnalyzer, PromotionLevel } from "./openai-analyzer.js";
 import { loadProductKnowledge } from "./products.js";
 import { selectStage } from "./ramp.js";
 import {
   evaluateContent,
   evaluatePostingGate,
+  evaluateRemovalThrottle,
   isSubredditCoolingDown,
   withinActiveHours,
 } from "./policy.js";
@@ -61,6 +63,8 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
           eff.posting.maxGapMinutes = stage.maxGapMinutes;
           eff.humanize.lurkProbability = stage.lurkProbability;
           eff.humanize.upvoteProbability = stage.upvoteProbability;
+          // Promotion stance follows account maturity (young = topical, no brand).
+          eff.ai.promotionLevel = stage.promotionLevel;
           db.recordAccountSnapshot({ ...stats, stage: stage.name, posting: stage.posting, dailyCap: stage.dailyCap });
           logger.info(
             {
@@ -80,6 +84,21 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
           eff.posting.enabled = false;
           logger.warn("Account stats unavailable; forcing safest draft-only mode this run");
         }
+      }
+
+      // Self-protection: re-check recent comments for removals, then back off to
+      // draft-only if Reddit is removing too many (account too new/low-karma).
+      await recheckComments(browser, db, eff);
+      const removal = db.removalStats(eff.recheck.withinDays);
+      const throttle = evaluateRemovalThrottle({
+        checked: removal.checked,
+        removed: removal.removed,
+        minSample: eff.recheck.minSample,
+        threshold: eff.recheck.removalRateThreshold,
+      });
+      if (eff.posting.enabled && throttle.throttle) {
+        logger.warn({ ...removal, reason: throttle.reason }, "Removal throttle engaged — forcing draft-only this run");
+        eff.posting.enabled = false;
       }
 
       // Posting-time gates (active hours, random skip) now that posting is resolved.
@@ -155,7 +174,7 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
             : undefined;
           const content = evaluateContent(post, eff.discovery, keywords);
           if (!content.ok) {
-            db.recordAnalysis(post.id, { relevance: 0, reason: `filtered: ${content.reason}`, draftComment: null });
+            db.recordAnalysis(post.id, { relevance: 0, intent: 0, quality: 0, reason: `filtered: ${content.reason}`, draftComment: null });
             continue;
           }
 
@@ -163,12 +182,19 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
           await browser.tryUpvote(eff.humanize.upvoteProbability);
           // Optionally research the topic live before drafting (config.ai.liveSearch).
           const research = await analyzer.research(post);
-          const analysis = await analyzer.analyze(post, knowledge.guidanceFor(postGroup), research);
+          // Brand mentions only where the subreddit allows them; otherwise topical.
+          const promo: PromotionLevel =
+            eff.ai.promotionLevel === "soft_brand" && postGroup && !postGroup.allowBrand
+              ? "topical"
+              : eff.ai.promotionLevel;
+          const analysis = await analyzer.analyze(post, knowledge.guidanceFor(postGroup), research, promo);
           logger.info(
             {
               subreddit: post.subreddit,
               audience: postGroup?.label,
               relevance: analysis.relevance,
+              intent: analysis.intent,
+              quality: analysis.quality,
               drafted: Boolean(analysis.draftComment),
               researched: Boolean(research),
             },
@@ -185,7 +211,10 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
         }
       }
 
-      scored.sort((left, right) => right.analysis.relevance - left.analysis.relevance);
+      // Rank by relevance plus weighted buying-intent, so posts where someone is
+      // actively asking for help/recommendations are commented on first.
+      const rank = (a: AnalysisResult): number => a.relevance + eff.ai.intentWeight * a.intent;
+      scored.sort((left, right) => rank(right.analysis) - rank(left.analysis));
 
       for (const item of scored) {
         if (db.wasAttempted(item.post.id)) {

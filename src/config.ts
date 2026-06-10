@@ -26,6 +26,10 @@ const aiSchema = z.object({
   minRelevanceScore: z.number().int().min(0).max(10).default(8),
   minCommentChars: z.number().int().min(40).default(90),
   maxCommentChars: z.number().int().min(80).default(320),
+  // Reject drafts the model self-rates below this (0-10) as low-value/filler.
+  minQuality: z.number().int().min(0).max(10).default(6),
+  // Weight applied to buying-intent when ranking which drafts to post first.
+  intentWeight: z.number().min(0).default(1),
   persona: z.string().min(1),
   // How product-forward comments may be:
   //  off        — pure help, no product steering at all
@@ -81,6 +85,18 @@ const runtimeSchema = z.object({
   maxAnalyzePerRun: z.number().int().min(1).default(25),
 });
 
+// Self-protection: re-check recently posted comments and back off if Reddit is
+// removing them (a sign the account is too new/low-karma or tripping a filter).
+const recheckSchema = z.object({
+  enabled: z.boolean().default(true),
+  maxPerRun: z.number().int().min(0).default(5),
+  withinDays: z.number().int().min(1).default(7),
+  // If at least `minSample` recent comments have been checked and the removal
+  // rate is at/above this fraction, force draft-only this run.
+  removalRateThreshold: z.number().min(0).max(1).default(0.34),
+  minSample: z.number().int().min(1).default(3),
+});
+
 const siteSchema = z.object({
   baseUrl: z.string().url(),
   maxPages: z.number().int().min(1).max(200).default(40),
@@ -102,17 +118,20 @@ const rampStageSchema = z.object({
   maxGapMinutes: z.number().int().min(0).default(420),
   lurkProbability: z.number().min(0).max(1).default(0.7),
   upvoteProbability: z.number().min(0).max(1).default(0.3),
+  // Promotion stance for this maturity stage. Young stages stay "topical"
+  // (pure value, no brand); mature, trusted stages may use "soft_brand".
+  promotionLevel: z.enum(["off", "topical", "soft_brand"]).default("topical"),
 });
 
 export type RampStage = z.infer<typeof rampStageSchema>;
 
 // Conservative defaults. Thresholds are AND-ed (need both age and karma).
 const DEFAULT_RAMP_STAGES: RampStage[] = [
-  { name: "warmup", minAccountDays: 0, minKarma: 0, posting: false, dailyCap: 0, minGapMinutes: 360, maxGapMinutes: 600, lurkProbability: 0.85, upvoteProbability: 0.45 },
-  { name: "cautious", minAccountDays: 21, minKarma: 100, posting: true, dailyCap: 1, minGapMinutes: 300, maxGapMinutes: 540, lurkProbability: 0.75, upvoteProbability: 0.4 },
-  { name: "steady", minAccountDays: 45, minKarma: 500, posting: true, dailyCap: 2, minGapMinutes: 240, maxGapMinutes: 420, lurkProbability: 0.6, upvoteProbability: 0.35 },
-  { name: "active", minAccountDays: 90, minKarma: 2000, posting: true, dailyCap: 3, minGapMinutes: 180, maxGapMinutes: 360, lurkProbability: 0.5, upvoteProbability: 0.3 },
-  { name: "established", minAccountDays: 180, minKarma: 5000, posting: true, dailyCap: 4, minGapMinutes: 150, maxGapMinutes: 300, lurkProbability: 0.4, upvoteProbability: 0.25 },
+  { name: "warmup", minAccountDays: 0, minKarma: 0, posting: false, dailyCap: 0, minGapMinutes: 360, maxGapMinutes: 600, lurkProbability: 0.85, upvoteProbability: 0.45, promotionLevel: "topical" },
+  { name: "cautious", minAccountDays: 21, minKarma: 100, posting: true, dailyCap: 1, minGapMinutes: 300, maxGapMinutes: 540, lurkProbability: 0.75, upvoteProbability: 0.4, promotionLevel: "topical" },
+  { name: "steady", minAccountDays: 45, minKarma: 500, posting: true, dailyCap: 2, minGapMinutes: 240, maxGapMinutes: 420, lurkProbability: 0.6, upvoteProbability: 0.35, promotionLevel: "topical" },
+  { name: "active", minAccountDays: 90, minKarma: 2000, posting: true, dailyCap: 3, minGapMinutes: 180, maxGapMinutes: 360, lurkProbability: 0.5, upvoteProbability: 0.3, promotionLevel: "soft_brand" },
+  { name: "established", minAccountDays: 180, minKarma: 5000, posting: true, dailyCap: 4, minGapMinutes: 150, maxGapMinutes: 300, lurkProbability: 0.4, upvoteProbability: 0.25, promotionLevel: "soft_brand" },
 ];
 
 const rampSchema = z.object({
@@ -139,6 +158,9 @@ const audienceSchema = z.object({
   // Optional explicit catalog product name; if omitted, products are matched to
   // this group by their `audience` field.
   product: z.string().optional(),
+  // Whether brand mentions are allowed here (e.g. subs that ban self-promo →
+  // false). Only matters at promotionLevel "soft_brand"; otherwise topical.
+  allowBrand: z.boolean().default(true),
 });
 
 export type AudienceGroup = z.infer<typeof audienceSchema>;
@@ -153,6 +175,7 @@ const configSchema = z.object({
   humanize: humanizeSchema,
   browser: browserSchema,
   runtime: runtimeSchema,
+  recheck: recheckSchema.default({}),
   daemon: daemonSchema.default({}),
   ramp: rampSchema.default({}),
 });

@@ -23,12 +23,17 @@ export class OpenAiAnalyzer {
     });
   }
 
-  async analyze(post: RedditPost, guidance?: string | null, research?: string | null): Promise<AnalysisResult> {
+  async analyze(
+    post: RedditPost,
+    guidance?: string | null,
+    research?: string | null,
+    promotionLevel?: PromotionLevel,
+  ): Promise<AnalysisResult> {
     const minChars = this.config.ai.minCommentChars;
     const maxChars = this.config.ai.maxCommentChars;
     const style = styleHints[Math.floor(Math.random() * styleHints.length)];
 
-    const level = this.config.ai.promotionLevel;
+    const level = promotionLevel ?? this.config.ai.promotionLevel;
     const guidanceBlock = level !== "off" && guidance ? `\n\n${guidance}\n` : "";
     const researchBlock = research
       ? `\n\nFresh, verified context from a live web search (use only what is relevant and accurate; do not quote URLs):\n${research}\n`
@@ -39,8 +44,13 @@ export class OpenAiAnalyzer {
 
 You are evaluating a Reddit post for whether it deserves a useful comment.
 
-1. Score relevance from 0-10.
-2. If relevance is at least ${this.config.ai.minRelevanceScore}, draft a comment.
+1. Score relevance from 0-10 (how on-topic the post is for you).
+2. Score intent from 0-10: how strongly the author is actively seeking advice,
+   help, or recommendations right now (a direct question seeking guidance = high;
+   a vent or update with no question = low).
+3. If relevance is at least ${this.config.ai.minRelevanceScore}, draft a comment.
+4. Score quality from 0-10: how genuinely valuable, specific, and non-generic
+   your drafted comment is to THIS post. Be a harsh critic; filler scores low.
 ${guidanceBlock}${researchBlock}
 Rules for the draft:
 - ${style}
@@ -52,7 +62,7 @@ Rules for the draft:
 - Avoid generic sympathy openers and filler.
 
 Return strict JSON with exactly:
-{"relevance": number, "reason": string, "comment": string}
+{"relevance": number, "intent": number, "quality": number, "reason": string, "comment": string}
 If you should not comment, return an empty string for comment.`;
 
     const user = [
@@ -81,11 +91,12 @@ If you should not comment, return an empty string for comment.`;
       parsed = JSON.parse(raw) as ModelDraft;
     } catch (error) {
       logger.error({ error, raw }, "OpenAI returned invalid JSON");
-      return { relevance: 0, reason: "invalid JSON from model", draftComment: null };
+      return { relevance: 0, intent: 0, quality: 0, reason: "invalid JSON from model", draftComment: null };
     }
 
     return finalizeAnalysis(parsed, {
       minRelevanceScore: this.config.ai.minRelevanceScore,
+      minQuality: this.config.ai.minQuality,
       minChars,
       maxChars,
     });
@@ -144,34 +155,49 @@ function promotionRuleFor(level: "off" | "topical" | "soft_brand", brandName?: s
   }
 }
 
+export type PromotionLevel = "off" | "topical" | "soft_brand";
+
 export interface ModelDraft {
   relevance?: number;
+  intent?: number;
+  quality?: number;
   reason?: string;
   comment?: string;
 }
 
 export interface DraftConstraints {
   minRelevanceScore: number;
+  minQuality: number;
   minChars: number;
   maxChars: number;
 }
 
 /**
  * Turn the raw model output into a validated {@link AnalysisResult}. Pure and
- * deterministic so the relevance threshold, length clamping, and the no-URL /
- * no-"as an AI" safety filter can be unit-tested without a live API call.
+ * deterministic so the relevance threshold, intent/quality gates, length
+ * clamping, and the no-URL / no-"as an AI" safety filter can be unit-tested
+ * without a live API call.
  */
 export function finalizeAnalysis(parsed: ModelDraft, constraints: DraftConstraints): AnalysisResult {
   const relevance = clampInt(parsed.relevance ?? 0, 0, 10);
+  const intent = clampInt(parsed.intent ?? 0, 0, 10);
+  const quality = clampInt(parsed.quality ?? 0, 0, 10);
   const reason = (parsed.reason ?? "").trim().slice(0, 280);
   const comment = (parsed.comment ?? "").trim();
+  const base = { relevance, intent, quality };
 
   if (relevance < constraints.minRelevanceScore) {
-    return { relevance, reason, draftComment: null };
+    return { ...base, reason, draftComment: null };
   }
 
   if (comment.length < constraints.minChars) {
-    return { relevance, reason: `${reason} | rejected: draft too short`, draftComment: null };
+    return { ...base, reason: `${reason} | rejected: draft too short`, draftComment: null };
+  }
+
+  // Quality gate: a low self-rated draft is filler — don't post it (protects the
+  // account's karma and keeps the 9:1 value ratio genuinely valuable).
+  if (quality < constraints.minQuality) {
+    return { ...base, reason: `${reason} | rejected: low quality (${quality})`, draftComment: null };
   }
 
   const clipped = comment.length > constraints.maxChars ? clipClean(comment, constraints.maxChars) : comment;
@@ -183,10 +209,10 @@ export function finalizeAnalysis(parsed: ModelDraft, constraints: DraftConstrain
     lowered.includes("as an ai") ||
     lowered.includes("language model")
   ) {
-    return { relevance, reason: `${reason} | rejected: safety filter`, draftComment: null };
+    return { ...base, reason: `${reason} | rejected: safety filter`, draftComment: null };
   }
 
-  return { relevance, reason, draftComment: clipped };
+  return { ...base, reason, draftComment: clipped };
 }
 
 function clampInt(value: number, min: number, max: number): number {

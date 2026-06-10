@@ -5,6 +5,7 @@ import {
   evaluateCandidate,
   evaluateContent,
   evaluatePostingGate,
+  evaluateRemovalThrottle,
   evaluateStructural,
   isSubredditCoolingDown,
   withinActiveHours,
@@ -171,6 +172,28 @@ describe("evaluatePostingGate", () => {
   it("allows once the gap has elapsed", () => {
     const old = NOW - 4 * 60 * 60; // 4 hours ago
     expect(evaluatePostingGate({ ...base, lastCommentTs: old }).allowed).toBe(true);
+  });
+});
+
+describe("evaluateRemovalThrottle", () => {
+  const cfg = { minSample: 3, threshold: 0.34 };
+
+  it("does not throttle before enough comments are checked", () => {
+    expect(evaluateRemovalThrottle({ checked: 2, removed: 2, ...cfg }).throttle).toBe(false);
+  });
+
+  it("throttles when the removal rate meets the threshold", () => {
+    const r = evaluateRemovalThrottle({ checked: 6, removed: 3, ...cfg }); // 50%
+    expect(r.throttle).toBe(true);
+    expect(r.rate).toBeCloseTo(0.5);
+  });
+
+  it("does not throttle when removals are within limits", () => {
+    expect(evaluateRemovalThrottle({ checked: 10, removed: 2, ...cfg }).throttle).toBe(false); // 20%
+  });
+
+  it("handles zero checked safely", () => {
+    expect(evaluateRemovalThrottle({ checked: 0, removed: 0, ...cfg }).throttle).toBe(false);
   });
 });
 

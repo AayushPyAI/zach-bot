@@ -99,6 +99,37 @@ export function isCandidatePost(
   return evaluateCandidate(post, discovery, nowSeconds).ok;
 }
 
+export interface RemovalThrottle {
+  throttle: boolean;
+  reason: string;
+  rate: number;
+}
+
+/**
+ * Decide whether to back off to draft-only because Reddit is removing our
+ * comments. Only triggers once enough comments have actually been checked, so a
+ * single early removal doesn't over-react. Pure and unit-tested.
+ */
+export function evaluateRemovalThrottle(input: {
+  checked: number;
+  removed: number;
+  minSample: number;
+  threshold: number;
+}): RemovalThrottle {
+  const rate = input.checked > 0 ? input.removed / input.checked : 0;
+  if (input.checked < input.minSample) {
+    return { throttle: false, reason: `not enough checked yet (${input.checked}/${input.minSample})`, rate };
+  }
+  if (rate >= input.threshold) {
+    return {
+      throttle: true,
+      reason: `removal rate ${(rate * 100).toFixed(0)}% ≥ ${(input.threshold * 100).toFixed(0)}% threshold`,
+      rate,
+    };
+  }
+  return { throttle: false, reason: `removal rate ${(rate * 100).toFixed(0)}% within limits`, rate };
+}
+
 /** True when the current hour falls inside the configured active window. */
 export function withinActiveHours(activeHours: readonly [number, number], hour: number): boolean {
   const [start, end] = activeHours;

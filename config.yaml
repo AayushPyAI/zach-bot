@@ -64,7 +64,13 @@ ai:
   minRelevanceScore: 8
   minCommentChars: 90
   maxCommentChars: 280
+  # Reject drafts the model self-rates below this (0-10) as filler/low-value.
+  minQuality: 6
+  # Weight on buying-intent when ranking which drafts to post first.
+  intentWeight: 1
   # Promotion stance: off | topical | soft_brand
+  # NOTE: when the ramp is enabled, the active stage's promotionLevel overrides
+  # this per run (young accounts stay topical; mature accounts may soft_brand).
   #   off        — pure help, no product steering
   #   topical    — steer toward the product's subject area, never a brand/URL (default, safest)
   #   soft_brand — topical, may occasionally name the brand (set site.brandName), still no URL
@@ -97,11 +103,13 @@ ramp:
   enabled: true
   aiReview: false
   stages:
-    - { name: warmup,      minAccountDays: 0,   minKarma: 0,    posting: false, dailyCap: 0, minGapMinutes: 360, maxGapMinutes: 600, lurkProbability: 0.85, upvoteProbability: 0.45 }
-    - { name: cautious,    minAccountDays: 21,  minKarma: 100,  posting: true,  dailyCap: 1, minGapMinutes: 300, maxGapMinutes: 540, lurkProbability: 0.75, upvoteProbability: 0.40 }
-    - { name: steady,      minAccountDays: 45,  minKarma: 500,  posting: true,  dailyCap: 2, minGapMinutes: 240, maxGapMinutes: 420, lurkProbability: 0.60, upvoteProbability: 0.35 }
-    - { name: active,      minAccountDays: 90,  minKarma: 2000, posting: true,  dailyCap: 3, minGapMinutes: 180, maxGapMinutes: 360, lurkProbability: 0.50, upvoteProbability: 0.30 }
-    - { name: established, minAccountDays: 180, minKarma: 5000, posting: true,  dailyCap: 4, minGapMinutes: 150, maxGapMinutes: 300, lurkProbability: 0.40, upvoteProbability: 0.25 }
+    - { name: warmup,      minAccountDays: 0,   minKarma: 0,    posting: false, dailyCap: 0, minGapMinutes: 360, maxGapMinutes: 600, lurkProbability: 0.85, upvoteProbability: 0.45, promotionLevel: topical }
+    # minKarma lowered to 0 so the current account (205d old, low karma) enters
+    # cautious now and starts building karma + age. Entry is age-gated (21d+).
+    - { name: cautious,    minAccountDays: 21,  minKarma: 0,    posting: true,  dailyCap: 1, minGapMinutes: 300, maxGapMinutes: 540, lurkProbability: 0.75, upvoteProbability: 0.40, promotionLevel: topical }
+    - { name: steady,      minAccountDays: 45,  minKarma: 500,  posting: true,  dailyCap: 2, minGapMinutes: 240, maxGapMinutes: 420, lurkProbability: 0.60, upvoteProbability: 0.35, promotionLevel: topical }
+    - { name: active,      minAccountDays: 90,  minKarma: 2000, posting: true,  dailyCap: 3, minGapMinutes: 180, maxGapMinutes: 360, lurkProbability: 0.50, upvoteProbability: 0.30, promotionLevel: soft_brand }
+    - { name: established, minAccountDays: 180, minKarma: 5000, posting: true,  dailyCap: 4, minGapMinutes: 150, maxGapMinutes: 300, lurkProbability: 0.40, upvoteProbability: 0.25, promotionLevel: soft_brand }
 
 posting:
   enabled: false
@@ -144,3 +152,12 @@ browser:
 runtime:
   databasePath: data/state.db
   maxAnalyzePerRun: 25
+
+# Self-protection: re-check recently posted comments and back off to draft-only
+# if Reddit is removing too many (a sign the account is too new / low-karma).
+recheck:
+  enabled: true
+  maxPerRun: 5
+  withinDays: 7
+  removalRateThreshold: 0.34
+  minSample: 3
