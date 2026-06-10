@@ -1,8 +1,8 @@
 .env
 data/
 logs/
-__pycache__/
-*.pyc
-.venv/
-venv/
+dist/
+node_modules/
+.playwright/
 .DS_Store
+.claude/

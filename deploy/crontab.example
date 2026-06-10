@@ -1,0 +1,10 @@
+# Cron alternative to the launchd job (Linux servers, or macOS if you prefer cron).
+# Install with:  crontab deploy/crontab.example   (edit the path first)
+#
+# Runs the bot at 10:00 and 15:00 every day. The bot's internal daily cap and
+# gaps keep volume safe even if it's triggered more often.
+#
+# EDIT the absolute path to match where the repo lives on the target machine.
+
+0 10 * * *  /Users/etech/Desktop/zach-bot/deploy/run-daily.sh
+0 15 * * *  /Users/etech/Desktop/zach-bot/deploy/run-daily.sh

@@ -1,43 +1,48 @@
-# =============================================================================
-# Reddit Comment Bot - configuration
-# Edit this file to change behavior WITHOUT touching the code.
-# =============================================================================
-
-# --- Which subreddits to scan ---
+# Fallback flat list, used only if `audiences` below is empty.
 subreddits:
   - personalfinance
   - legaladvice
   - EstatePlanning
 
-# --- Post discovery ---
+# Client product website. `npm run scrape` crawls this and distills a product
+# knowledge base into catalogPath, which the analyzer uses to tailor comments.
+site:
+  baseUrl: https://www.planningforms.com
+  maxPages: 40
+  catalogPath: data/products.json
+  # Brand name, used only when ai.promotionLevel is "soft_brand".
+  brandName: Planning Forms
+
+# Audience groups: which subreddits map to which audience, and (optionally) an
+# explicit product name from the catalog. If `product` is omitted, products are
+# matched to a group by their distilled `audience` field. Comments are kept
+# topical (no brand name, no URLs) per the agreed promotion stance.
+audiences:
+  - label: estate planning
+    subreddits: [EstatePlanning, legaladvice, personalfinance]
+    keywords: [will, estate, probate, inheritance, trust, executor, beneficiary, intestate, power of attorney]
+  - label: retirement planning
+    subreddits: [retirement, financialindependence, personalfinance]
+    keywords: [retirement, 401k, ira, pension, social security, annuity, estate, beneficiary]
+  - label: caring for aging parents
+    subreddits: [AgingParents, CaregiverSupport, eldercare, dementia]
+    keywords: [aging parent, elderly, caregiver, power of attorney, guardianship, nursing home, advance directive, will]
+  - label: parents of college students
+    subreddits: [CollegeParents, Parenting, paying_for_college]
+    keywords: [college, turning 18, young adult, power of attorney, healthcare proxy, FERPA, HIPAA, emergency]
+
 discovery:
-  # Fallback sort tab if rotation is empty: "new" | "hot" | "rising"
-  sort: new
-  # A sort is picked RANDOMLY from this list per subreddit each run (looks
-  # less robotic). Set to [] to always use `sort` above.
-  sort_rotation:
+  sortRotation:
     - new
     - hot
     - rising
-  # Shuffle the order subreddits are scanned each run.
-  shuffle_subreddits: true
-  # How many recent posts to fetch from each subreddit per run
-  posts_per_subreddit: 15
-  # Skip posts older than this (hours). Engaging on stale posts looks bot-like.
-  max_age_hours: 12
-  # Skip posts younger than this (minutes). Brand new posts often get removed.
-  min_age_minutes: 15
-  # Skip posts shorter than this (characters in the body). Low-context posts -> bad replies.
-  min_body_chars: 200
-  # When true: open each subreddit in the visible browser and SCROLL it
-  # before fetching posts, so you can watch the bot working. Slower.
-  visual_mode: true
-  # Extra: also open each candidate post in the browser ("reading" it).
-  # Only takes effect if visual_mode: true. Even slower.
-  visual_open_posts: false
-
-  # Post title+body must contain at least one keyword (case-insensitive).
-  # Applies to all subreddits — keeps comments estate / inheritance focused.
+  shuffleSubreddits: true
+  postsPerSubreddit: 15
+  maxAgeHours: 12
+  minAgeMinutes: 15
+  minBodyChars: 140
+  visualMode: true
+  openPostWhileReading: true
   keywords:
     - will
     - estate
@@ -54,90 +59,88 @@ discovery:
     - bequest
     - fiduciary
 
-# --- AI behavior ---
 ai:
-  # Minimum relevance score (0-10) for a post to be commented on.
-  min_relevance_score: 8
-  # Hard caps on the generated comment - keep short & punchy
-  min_comment_chars: 80
-  max_comment_chars: 280
-  # Persona / tone the AI should write in. Edit this freely.
+  model: gpt-4.1-mini
+  minRelevanceScore: 8
+  minCommentChars: 90
+  maxCommentChars: 280
+  # Promotion stance: off | topical | soft_brand
+  #   off        — pure help, no product steering
+  #   topical    — steer toward the product's subject area, never a brand/URL (default, safest)
+  #   soft_brand — topical, may occasionally name the brand (set site.brandName), still no URL
+  promotionLevel: topical
+  # Live web search before drafting, so replies are grounded in current facts.
+  # Costs an extra API call per post and uses a search-enabled model.
+  liveSearch: false
+  searchModel: gpt-4o-search-preview
   persona: |
-    You are a thoughtful, helpful Redditor with real-world experience in
-    estate planning, wills, probate, trusts, and inheritance (including how
-    those topics show up in personal finance and basic legal questions).
-    You write like a human: lowercase is fine, contractions ok, no emojis,
-    no markdown headers, no corporate tone. Give specific, practical advice
-    tied to the post. You NEVER mention being an AI. You NEVER promote
-    anything. You NEVER include URLs or product names. If unsure, say so and
-    suggest talking to an estate attorney for state-specific rules.
+    You are a thoughtful Redditor who gives practical, plain-English guidance
+    about estate planning, wills, probate, trusts, inheritance, and adjacent
+    personal-finance or basic legal questions. You sound human, concise, and
+    specific to the post. You never mention being an AI and never include URLs.
 
-# --- Posting behavior (SAFETY CRITICAL) ---
-posting:
-  # If true, the bot will only DRAFT comments and log them - it will NOT post.
-  dry_run: false
-  # Max comments per 24h. Set to 0 for no limit (only min_gap + jitter apply).
-  daily_cap: 0
-  # Base gap between comments is RANDOM in this range (minutes) - not fixed.
-  # Each cycle the bot picks a fresh value between these two numbers.
-  min_gap_min_minutes: 150
-  min_gap_max_minutes: 320
-  # Extra random delay added ON TOP of the base gap (minutes).
-  jitter_minutes: 60
-  # Simulated typing speed (chars per second). Range. ~3-6 = realistic.
-  typing_cps_min: 3
-  typing_cps_max: 6
-  # true  = post comments on old.reddit.com (reliable, slight bot tell)
-  # false = post on www.reddit.com (more human, can break if Reddit changes UI)
-  use_old_reddit: true
-  # If new-reddit posting fails, automatically retry on old.reddit
-  fallback_to_old_reddit: true
+# 24/7 randomized operation (used with `--loop`). Gaps between sessions are
+# randomized so activity never looks scheduled; occasional long breaks too.
+daemon:
+  sessionGapMinMinutes: 40
+  sessionGapMaxMinutes: 210
+  longBreakProbability: 0.15
+  longBreakMinHours: 3
+  longBreakMaxHours: 9
 
-# --- Humanize: make the whole session look like a real person ---
-humanize:
-  # Master switch for all the behaviors below.
+# Account-maturity ramp. Each run the bot reads the account's age + karma and
+# auto-selects the most advanced stage it qualifies for (needs BOTH thresholds).
+# A new account stays in "warmup" (draft-only, mostly lurking) and activity
+# scales up automatically as the account ages and earns karma. Set once; the bot
+# decides the rest. Set enabled:false to ignore the ramp and use posting/* + CLI.
+ramp:
   enabled: true
+  aiReview: false
+  stages:
+    - { name: warmup,      minAccountDays: 0,   minKarma: 0,    posting: false, dailyCap: 0, minGapMinutes: 360, maxGapMinutes: 600, lurkProbability: 0.85, upvoteProbability: 0.45 }
+    - { name: cautious,    minAccountDays: 21,  minKarma: 100,  posting: true,  dailyCap: 1, minGapMinutes: 300, maxGapMinutes: 540, lurkProbability: 0.75, upvoteProbability: 0.40 }
+    - { name: steady,      minAccountDays: 45,  minKarma: 500,  posting: true,  dailyCap: 2, minGapMinutes: 240, maxGapMinutes: 420, lurkProbability: 0.60, upvoteProbability: 0.35 }
+    - { name: active,      minAccountDays: 90,  minKarma: 2000, posting: true,  dailyCap: 3, minGapMinutes: 180, maxGapMinutes: 360, lurkProbability: 0.50, upvoteProbability: 0.30 }
+    - { name: established, minAccountDays: 180, minKarma: 5000, posting: true,  dailyCap: 4, minGapMinutes: 150, maxGapMinutes: 300, lurkProbability: 0.40, upvoteProbability: 0.25 }
 
-  # At session start, casually browse 1-2 unrelated subreddits (lurking),
-  # so the account isn't "only ever commenting in 3 niche subs".
-  lurk_probability: 0.6
-  lurk_subreddits:
+posting:
+  enabled: false
+  dailyCap: 1
+  minGapMinutes: 180
+  maxGapMinutes: 360
+  jitterMinutes: 45
+  useOldReddit: true
+  fallbackToOldReddit: true
+  typingCharsPerSecondMin: 3
+  typingCharsPerSecondMax: 6
+
+humanize:
+  enabled: true
+  lurkProbability: 0.6
+  lurkSubreddits:
     - news
     - todayilearned
     - mildlyinteresting
     - AskReddit
-  lurk_min: 1
-  lurk_max: 2
+  lurkMin: 1
+  lurkMax: 2
+  upvoteProbability: 0.35
+  skipGoodPostProbability: 0.15
+  skipRunProbability: 0.1
+  activeHours: [8, 23]
+  perSubredditCooldownMinutes: 360
 
-  # While reading a post/feed, sometimes upvote something (real users vote).
-  upvote_probability: 0.45
-
-  # Even when a draft is good, occasionally just read and move on (don't
-  # comment on EVERY good post - humans don't).
-  skip_good_post_probability: 0.15
-
-  # Random chance the whole run does nothing today (humans aren't daily-robots).
-  skip_day_probability: 0.15
-
-  # Only operate between these local hours [start, end). [] = any time.
-  active_hours: [8, 23]
-
-  # Never comment in the same subreddit twice within this many minutes.
-  per_subreddit_cooldown_minutes: 360
-
-# --- Browser ---
 browser:
-  # Set false the first time you log in, so YOU can solve any captcha.
-  # After login, the session is saved and headless: true works.
   headless: false
-  # Where the persistent browser profile is stored (cookies, login).
-  user_data_dir: data/browser_profile
-  # User agent. Leave default unless you know what you're doing.
-  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+  userDataDir: data/browser-profile
+  # Drive the real installed Google Chrome for an authentic fingerprint.
+  # Set to "" to fall back to Playwright's bundled Chromium.
+  channel: chrome
+  # Leave userAgent unset so Chrome sends its own real UA. Overriding it with a
+  # value that doesn't match the channel/OS is itself a bot tell.
+  locale: en-US
+  timezoneId: America/New_York
 
-# --- Runtime ---
 runtime:
-  # Path to the sqlite db that tracks which posts we've already seen/replied to.
-  db_path: data/state.db
-  # Log file path
-  log_path: logs/bot.log
+  databasePath: data/state.db
+  maxAnalyzePerRun: 25

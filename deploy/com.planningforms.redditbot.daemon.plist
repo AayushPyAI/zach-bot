@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS launchd job for 24/7 operation. Keeps the bot running as a daemon
+  (`--loop`), which starts human-like sessions at RANDOMIZED intervals — nothing
+  on a fixed schedule. KeepAlive restarts it if it ever exits.
+
+  SETUP:
+    1. Edit the two absolute paths below to match this machine.
+    2. Build once:  npm run build   (the daemon below runs the compiled code)
+    3. cp deploy/com.planningforms.redditbot.daemon.plist ~/Library/LaunchAgents/
+    4. launchctl load ~/Library/LaunchAgents/com.planningforms.redditbot.daemon.plist
+    5. To stop: launchctl unload ~/Library/LaunchAgents/com.planningforms.redditbot.daemon.plist
+
+  Use this OR the cron/single-run job — not both.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.planningforms.redditbot.daemon</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <!-- EDIT: absolute path to deploy/run-loop.sh on this machine -->
+    <string>/Users/etech/Desktop/zach-bot/deploy/run-loop.sh</string>
+  </array>
+
+  <!-- EDIT: absolute path to the project root on this machine -->
+  <key>WorkingDirectory</key>
+  <string>/Users/etech/Desktop/zach-bot</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/etech/Desktop/zach-bot/logs/daemon.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/etech/Desktop/zach-bot/logs/daemon.err.log</string>
+</dict>
+</plist>

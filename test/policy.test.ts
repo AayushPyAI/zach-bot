@@ -1,0 +1,198 @@
+import { describe, expect, it } from "vitest";
+
+import type { AppConfig } from "../src/config.js";
+import {
+  evaluateCandidate,
+  evaluateContent,
+  evaluatePostingGate,
+  evaluateStructural,
+  isSubredditCoolingDown,
+  withinActiveHours,
+} from "../src/policy.js";
+import type { RedditPost } from "../src/types.js";
+
+const NOW = 1_700_000_000;
+
+function makePost(overrides: Partial<RedditPost> = {}): RedditPost {
+  return {
+    id: "abc",
+    subreddit: "EstatePlanning",
+    title: "Need help with my late father's will",
+    body: "x".repeat(200),
+    author: "someone",
+    url: "https://www.reddit.com/r/EstatePlanning/comments/abc",
+    permalink: "/r/EstatePlanning/comments/abc",
+    createdUtc: NOW - 3600, // 1 hour old
+    commentCount: 2,
+    upvotes: 5,
+    over18: false,
+    locked: false,
+    archived: false,
+    isSelf: true,
+    ...overrides,
+  };
+}
+
+const discovery: AppConfig["discovery"] = {
+  sortRotation: ["new", "hot", "rising"],
+  shuffleSubreddits: true,
+  postsPerSubreddit: 15,
+  maxAgeHours: 12,
+  minAgeMinutes: 15,
+  minBodyChars: 140,
+  keywords: ["will", "estate", "probate"],
+  visualMode: true,
+  openPostWhileReading: true,
+};
+
+describe("evaluateCandidate", () => {
+  it("accepts a fresh, on-topic self post", () => {
+    expect(evaluateCandidate(makePost(), discovery, NOW)).toEqual({
+      ok: true,
+      reason: "keyword match",
+    });
+  });
+
+  it("rejects link posts", () => {
+    expect(evaluateCandidate(makePost({ isSelf: false }), discovery, NOW).ok).toBe(false);
+  });
+
+  it("rejects locked, archived, and nsfw posts", () => {
+    expect(evaluateCandidate(makePost({ locked: true }), discovery, NOW).reason).toBe("locked");
+    expect(evaluateCandidate(makePost({ archived: true }), discovery, NOW).reason).toBe("archived");
+    expect(evaluateCandidate(makePost({ over18: true }), discovery, NOW).reason).toBe("nsfw");
+  });
+
+  it("rejects posts that are too new or too old", () => {
+    expect(evaluateCandidate(makePost({ createdUtc: NOW - 60 }), discovery, NOW).reason).toBe("too new");
+    expect(
+      evaluateCandidate(makePost({ createdUtc: NOW - 13 * 3600 }), discovery, NOW).reason,
+    ).toBe("too old");
+  });
+
+  it("rejects bodies under the minimum length", () => {
+    expect(evaluateCandidate(makePost({ body: "short" }), discovery, NOW).reason).toBe(
+      "body too short",
+    );
+  });
+
+  it("rejects off-topic posts when keywords are configured", () => {
+    const offTopic = makePost({ title: "best pizza in town", body: "y".repeat(200) });
+    expect(evaluateCandidate(offTopic, discovery, NOW).reason).toBe("no keyword match");
+  });
+
+  it("accepts everything (length permitting) when no keywords are configured", () => {
+    const noKeywords = { ...discovery, keywords: [] };
+    const offTopic = makePost({ title: "best pizza in town", body: "y".repeat(200) });
+    expect(evaluateCandidate(offTopic, noKeywords, NOW).ok).toBe(true);
+  });
+});
+
+describe("evaluateStructural (feed-only, no body)", () => {
+  it("passes a fresh self post even before its body is read", () => {
+    const stub = makePost({ body: "" });
+    expect(evaluateStructural(stub, discovery, NOW).ok).toBe(true);
+  });
+
+  it("rejects link posts, nsfw, locked, and bad ages without needing a body", () => {
+    expect(evaluateStructural(makePost({ isSelf: false, body: "" }), discovery, NOW).ok).toBe(false);
+    expect(evaluateStructural(makePost({ over18: true, body: "" }), discovery, NOW).reason).toBe("nsfw");
+    expect(evaluateStructural(makePost({ createdUtc: NOW - 60, body: "" }), discovery, NOW).reason).toBe("too new");
+  });
+});
+
+describe("evaluateContent (post-read)", () => {
+  it("rejects bodies under the minimum length", () => {
+    expect(evaluateContent(makePost({ body: "short" }), discovery).reason).toBe("body too short");
+  });
+
+  it("rejects off-topic bodies when keywords are set", () => {
+    const offTopic = makePost({ title: "pizza", body: "z".repeat(200) });
+    expect(evaluateContent(offTopic, discovery).reason).toBe("no keyword match");
+  });
+
+  it("accepts an on-topic body of sufficient length", () => {
+    expect(evaluateContent(makePost(), discovery).ok).toBe(true);
+  });
+
+  it("uses the per-audience keyword override when provided", () => {
+    // A college-audience post that mentions none of the global estate keywords
+    // but matches the audience override should pass.
+    const collegePost = makePost({
+      title: "My kid is turning 18 and heading to college",
+      body: "Wondering what healthcare proxy paperwork we need now that they are an adult. ".repeat(4),
+    });
+    expect(evaluateContent(collegePost, discovery).reason).toBe("no keyword match");
+    expect(evaluateContent(collegePost, discovery, ["healthcare proxy", "college"]).ok).toBe(true);
+  });
+});
+
+describe("withinActiveHours", () => {
+  it("handles normal windows", () => {
+    expect(withinActiveHours([8, 23], 10)).toBe(true);
+    expect(withinActiveHours([8, 23], 23)).toBe(false); // end is exclusive
+    expect(withinActiveHours([8, 23], 7)).toBe(false);
+  });
+
+  it("handles wrap-around windows", () => {
+    expect(withinActiveHours([22, 6], 23)).toBe(true);
+    expect(withinActiveHours([22, 6], 3)).toBe(true);
+    expect(withinActiveHours([22, 6], 12)).toBe(false);
+  });
+});
+
+describe("evaluatePostingGate", () => {
+  const base = {
+    enabled: true,
+    dailyCap: 1,
+    minGapMinutes: 180,
+    commentsInLast24h: 0,
+    lastCommentTs: null,
+    nowSeconds: NOW,
+  };
+
+  it("always allows in draft-only mode", () => {
+    expect(evaluatePostingGate({ ...base, enabled: false, commentsInLast24h: 99 }).allowed).toBe(true);
+  });
+
+  it("blocks when the daily cap is reached", () => {
+    expect(evaluatePostingGate({ ...base, commentsInLast24h: 1 }).allowed).toBe(false);
+  });
+
+  it("allows the first comment when none exist yet", () => {
+    expect(evaluatePostingGate(base).allowed).toBe(true);
+  });
+
+  it("blocks when the minimum gap has not elapsed", () => {
+    const recent = NOW - 60 * 60; // 1 hour ago, gap is 180m
+    expect(evaluatePostingGate({ ...base, lastCommentTs: recent }).allowed).toBe(false);
+  });
+
+  it("allows once the gap has elapsed", () => {
+    const old = NOW - 4 * 60 * 60; // 4 hours ago
+    expect(evaluatePostingGate({ ...base, lastCommentTs: old }).allowed).toBe(true);
+  });
+});
+
+describe("isSubredditCoolingDown", () => {
+  const base = {
+    enabled: true,
+    humanizeEnabled: true,
+    cooldownMinutes: 360,
+    lastCommentTs: NOW - 60 * 60,
+    nowSeconds: NOW,
+  };
+
+  it("is cooling down within the window", () => {
+    expect(isSubredditCoolingDown(base)).toBe(true);
+  });
+
+  it("is not cooling down after the window", () => {
+    expect(isSubredditCoolingDown({ ...base, lastCommentTs: NOW - 7 * 60 * 60 })).toBe(false);
+  });
+
+  it("never cools down in draft-only mode or with no history", () => {
+    expect(isSubredditCoolingDown({ ...base, enabled: false })).toBe(false);
+    expect(isSubredditCoolingDown({ ...base, lastCommentTs: null })).toBe(false);
+  });
+});

@@ -1,0 +1,37 @@
+{
+  "name": "reddit-automation-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TypeScript Reddit automation bot with Playwright, OpenAI, and SQLite state.",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "scrape": "tsx src/scrape.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "install:browsers": "playwright install chromium"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.4.7",
+    "openai": "^5.8.2",
+    "pino": "^9.7.0",
+    "playwright": "^1.54.1",
+    "rebrowser-playwright": "^1.52.0",
+    "yaml": "^2.8.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.4",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.9"
+  }
+}

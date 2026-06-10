@@ -1,203 +1,294 @@
-# Reddit Comment Bot
+# Reddit Automation Bot
 
-A browser-automation bot that:
+A TypeScript + Playwright automation bot that:
 
-1. Logs into a Reddit account in a real Chrome window (Playwright).
-2. Scans subreddits you choose (default: `r/personalfinance`, `r/legaladvice`, `r/EstatePlanning`).
-3. Pulls recent text posts.
-4. Sends each post to OpenAI to (a) score relevance 0-10 and (b) draft a helpful reply.
-5. Posts the best drafts as comments, respecting daily caps and human-like delays.
+1. Opens a persistent Chromium profile and logs into Reddit.
+2. Browses target subreddits in a visible browser session.
+3. Pulls recent text posts from Reddit JSON feeds.
+4. Uses OpenAI to score relevance and draft human-sounding replies.
+5. Either saves drafts only or posts comments with cooldowns, caps, and humanized timing.
 
-**No product links are inserted in the current version.** That's intentional - we're building reputation first.
+The repo was rebuilt around Node + TypeScript because that stack is a better long-term fit for heavy browser automation than the earlier Python version.
 
----
+## Goal
 
-## ⚠️ Read this before you do anything
+The project is designed for a narrow workflow:
 
-Reddit aggressively detects bots and self-promotion. **Brand new accounts that drop links get shadowbanned (invisibly muted) very quickly.** Even commenting from a brand new account is risky if done in volume.
+- discover recent discussion posts in selected subreddits
+- filter them structurally before any model call
+- ask OpenAI whether the bot should engage
+- generate a short, context-aware reply when the post is a good fit
+- keep state in SQLite so the bot does not reprocess or double-comment
+- operate conservatively with draft-only mode as the default
 
-Recommended ramp-up:
+## Architecture
 
-| Week | What the bot does | What you do |
-|---|---|---|
-| 1 | `dry_run: true` - only drafts, never posts | You manually post 2-3 genuine comments per day from the account. Build karma. |
-| 2 | `dry_run: true` still | Keep doing manual comments. Get to ~50 comment karma. |
-| 3+ | `dry_run: false`, `daily_cap: 1-2` | Let the bot post 1-2 comments per day. Watch for shadowbans. |
-| Later | Add a product link (separate change) | Only after the account is established. |
+Runtime modules:
 
-To check if you've been shadowbanned, log out and visit your profile from an incognito window. If your comments are missing → shadowbanned.
+- [src/index.ts](/Users/etech/Desktop/zach-bot/src/index.ts): entrypoint
+- [src/config.ts](/Users/etech/Desktop/zach-bot/src/config.ts): `.env` + YAML config loading and validation
+- [src/reddit-browser.ts](/Users/etech/Desktop/zach-bot/src/reddit-browser.ts): persistent browser session, login, and human-like interaction (cursor, typing, dwell)
+- [src/reddit-discovery.ts](/Users/etech/Desktop/zach-bot/src/reddit-discovery.ts): subreddit feed DOM scraping and post-body reading
+- [src/openai-analyzer.ts](/Users/etech/Desktop/zach-bot/src/openai-analyzer.ts): relevance scoring and draft generation
+- [src/comment-publisher.ts](/Users/etech/Desktop/zach-bot/src/comment-publisher.ts): browser comment submission
+- [src/db.ts](/Users/etech/Desktop/zach-bot/src/db.ts): SQLite state for seen posts, drafts, and outcomes
+- [src/policy.ts](/Users/etech/Desktop/zach-bot/src/policy.ts): pure decision logic (candidate filtering, posting gates, cooldowns)
+- [src/site-scraper.ts](/Users/etech/Desktop/zach-bot/src/site-scraper.ts): crawls the product website and distills a product catalog
+- [src/products.ts](/Users/etech/Desktop/zach-bot/src/products.ts): loads the catalog and resolves per-audience product context
+- [src/workflow.ts](/Users/etech/Desktop/zach-bot/src/workflow.ts): end-to-end orchestration
 
----
+The decision rules the bot lives by — which posts qualify, whether a comment is
+allowed right now, when a subreddit is cooling down — are isolated in
+`policy.ts` as pure functions with no I/O, so they are unit-tested directly.
 
-## Prerequisites (one-time setup)
+## Why TypeScript
 
-You'll need:
+This version uses TypeScript instead of Python because:
 
-- **Python 3.10 or newer** for Windows: <https://www.python.org/downloads/>
-  During install, **tick "Add Python to PATH"**.
-- **An OpenAI API key**: <https://platform.openai.com/api-keys>
-  Cost is tiny (`gpt-4o-mini` is ~$0.001 per post analyzed).
-- **A Reddit account.** If you don't have one, sign up at <https://www.reddit.com/register>. Then go to the account on the website and:
-  - Add an email and verify it.
-  - Set a profile picture and bio.
-  - Manually upvote ~10 posts and comment on 2-3 posts naturally over the next day.
-  These small steps reduce shadowban risk dramatically.
+- Playwright’s strongest ecosystem is in Node.
+- Browser automation examples and fixes usually land in Node first.
+- ESM/TypeScript works well for long-running automation services and richer orchestration.
+- Shared types make config, state, and workflow changes safer as the bot grows.
 
----
+## Setup
 
-## Install
+1. Install dependencies:
 
-Open **PowerShell**, then run these commands one at a time:
-
-```powershell
-cd C:\Users\asus\reddit-comment-bot
-
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-
-pip install --upgrade pip
-pip install -r requirements.txt
-
-python -m playwright install chromium
+```bash
+npm install
 ```
 
-If PowerShell blocks `Activate.ps1`, run this once and accept:
+2. Install the Playwright browser:
 
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```bash
+npm run install:browsers
 ```
 
----
+3. Create your environment file:
 
-## Configure
-
-1. **Create your `.env` file** from the template:
-
-   ```powershell
-   Copy-Item .env.example .env
-   notepad .env
-   ```
-
-   Fill in your real Reddit username/password and your OpenAI API key. Save.
-
-2. **(Optional) Tweak `config.yaml`.** The defaults are safe (`dry_run: true`, daily cap 2, gap 90 min). Read the comments in that file - everything you might want to change is there.
-
----
-
-## First run (login)
-
-The very first run will open a real Chrome window so YOU can solve any Reddit captcha. `config.yaml` already has `browser.headless: false` for this reason.
-
-```powershell
-python -m src.main
+```bash
+cp .env.example .env
 ```
 
-What you should see:
+4. Fill in:
 
-1. A Chromium window opens.
-2. Bot navigates to `reddit.com/login` and types your credentials.
-3. **If a captcha appears, solve it yourself in the window.** The bot will wait up to 2 minutes.
-4. Once logged in, the bot loads each subreddit's JSON, picks candidate posts, sends them to OpenAI, and prints draft comments to the terminal.
-5. Because `dry_run: true`, **nothing is actually posted**. The drafts are saved to `data/state.db` and `logs/bot.log`.
+- `REDDIT_USERNAME`
+- `REDDIT_PASSWORD`
+- `OPENAI_API_KEY`
 
-The login session is saved in `data/browser_profile/`, so subsequent runs won't need to log in again. After the first successful run you can set `browser.headless: true` in `config.yaml`.
+5. Build the product knowledge base from the client website:
 
----
-
-## Reviewing drafts
-
-After a run, inspect what the AI produced:
-
-```powershell
-python -c "import sqlite3; c=sqlite3.connect('data/state.db'); [print('---', r['title'], '\nscore=', r['relevance'], '\n', r['draft_comment'], '\n') for r in c.execute('select * from posts where draft_comment is not null order by first_seen_ts desc limit 10')]"
+```bash
+npm run scrape
 ```
 
-Or just open `data/state.db` with [DB Browser for SQLite](https://sqlitebrowser.org/) and look at the `posts` table.
+This crawls `site.baseUrl` (config.yaml), distills the products with OpenAI, and
+writes `data/products.json`. Re-run it whenever the website changes.
 
-If the drafts look good → flip `posting.dry_run` to `false` in `config.yaml` and run again. The bot will now actually post, but no more than `daily_cap` per 24h, with `min_gap_minutes` between posts.
+## Product knowledge base & audience targeting
 
----
+Comments are tailored per audience. `config.yaml` defines `audiences` — each maps
+a set of subreddits to an audience label (estate planning, retirement planning,
+caring for aging parents, parents of college students). `npm run scrape` builds a
+catalog of the client's products, each tagged with its best-fit audience and a
+set of **topical talking points**.
 
-## Going live (when you're ready)
+At runtime, when the bot reads a post, it looks up the audience for that
+subreddit and feeds the matching product's talking points to the model as
+*topical guidance only* — the comment may discuss the subject area (e.g. why an
+18-year-old needs their own healthcare proxy) but **never names a brand/company
+and never includes a URL**. That keeps it helpful and ban-resistant while still
+steering toward the right product topic for the right audience.
 
-1. Edit `config.yaml`:
-   ```yaml
-   posting:
-     dry_run: false
-     daily_cap: 1     # start very low
-     min_gap_minutes: 180
-   ```
-2. Re-run `python -m src.main`.
-3. **Open your profile in incognito** after each posted comment and confirm the comment is visible. If it's not → you're shadowbanned and need to pause / appeal / use a different account.
+## Account-maturity ramp (safety + growth, automatic)
 
----
+The bot scales its own activity to the account's maturity so a young account
+stays safe and activity grows as the account does. Each run it reads the
+logged-in account's **age and karma** and auto-selects the most advanced
+`ramp` stage it qualifies for (both thresholds required):
 
-## Scheduling (run automatically every few hours)
+| Stage | Needs (age / karma) | Posts/day | Behavior |
+|---|---|---|---|
+| warmup | 0d / 0 | 0 (draft-only) | mostly lurk + read, build presence |
+| cautious | 21d / 100 | 1 | long gaps |
+| steady | 45d / 500 | 2 | |
+| active | 90d / 2000 | 3 | |
+| established | 180d / 5000 | 4 | |
 
-Once you're comfortable, schedule it via Windows Task Scheduler:
+You set the stages once in `config.yaml`; from then on the decision is automatic
+every run, and each decision is logged and snapshotted to the DB
+(`account_snapshots`) so growth is auditable. A brand-new account therefore
+**only drafts and lurks** until it has earned enough age + karma — no posting,
+no risk. The ramp is authoritative for safety: `--live` cannot exceed the stage,
+and if account stats can't be read the bot falls back to draft-only. Set
+`ramp.enabled: false` to bypass it (e.g. a one-off supervised live test).
 
-1. Win + R → `taskschd.msc`.
-2. Create Basic Task → Trigger: every 3 hours.
-3. Action: Start a program.
-   - Program: `C:\Users\asus\reddit-comment-bot\.venv\Scripts\python.exe`
-   - Arguments: `-m src.main`
-   - Start in: `C:\Users\asus\reddit-comment-bot`
+## 24/7 operation (recommended)
 
-The bot's internal daily-cap + min-gap logic will prevent over-posting even if the scheduler fires often.
+For continuous, human-like operation, run the bot as a long-lived daemon:
 
----
-
-## Project layout
-
-```
-reddit-comment-bot/
-├── README.md            <- you are here
-├── requirements.txt     <- Python packages
-├── config.yaml          <- tunables (subs, caps, persona, etc.)
-├── .env.example         <- copy to .env and fill in
-├── data/
-│   ├── state.db         <- sqlite: seen posts, drafts, what was commented
-│   └── browser_profile/ <- persistent Chrome profile (cookies, login)
-├── logs/
-│   └── bot.log          <- rotating log file
-└── src/
-    ├── main.py          <- orchestrator (run this)
-    ├── config.py        <- loads .env + config.yaml
-    ├── browser.py       <- Playwright + login + human-like input
-    ├── discover.py      <- fetches and filters posts via Reddit JSON
-    ├── analyzer.py      <- OpenAI: score relevance + draft comment
-    ├── poster.py        <- types and submits the comment
-    ├── db.py            <- sqlite state
-    └── logger.py        <- logging setup
+```bash
+npm run dev -- --loop --live
 ```
 
----
+`--loop` keeps one process alive and starts sessions at **randomized** intervals
+(see the `daemon` config) — nothing happens on a fixed schedule, which is what
+keeps the activity pattern looking human. Each session is a full lurk → discover
+→ read → maybe-comment cycle, and the internal gates (active hours, daily cap,
+min/max gap, per-subreddit cooldown, random skips) keep volume safe. Occasional
+longer "offline" breaks are mixed in. It shuts down cleanly on Ctrl-C / SIGTERM.
 
-## When you're ready to add a product link (later)
+To keep it running across reboots/crashes on macOS, use the KeepAlive launchd job
+(edit the paths first, `npm run build` once, then load it):
 
-Don't do this until you have an aged account (>30 days, >100 comment karma, no removed comments). Then:
+```bash
+cp deploy/com.planningforms.redditbot.daemon.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.planningforms.redditbot.daemon.plist
+```
 
-1. Add to `config.yaml`:
-   ```yaml
-   product:
-     enabled: true
-     name: "YourProductName"
-     url: "https://your-domain.com"
-     # Only mention in ~30% of comments, only when truly relevant
-     mention_probability: 0.3
-   ```
-2. Update `analyzer.py` system prompt to allow mentioning the product when contextually appropriate.
-3. Strongly prefer "link in bio" phrasing over pasting raw URLs.
+### Alternative: scheduled single runs
 
-I (the assistant) can wire this up for you in a follow-up once you've reached that stage.
+If you prefer discrete runs instead of a daemon, the templates in `deploy/`
+(`com.planningforms.redditbot.plist` for launchd, `crontab.example` for cron)
+call `deploy/run-daily.sh` (`npm run dev -- --live`) at set times. Use the daemon
+**or** the scheduled job, not both.
 
----
+## Logging
 
-## Troubleshooting
+Everything is logged for later debugging. Each run writes a full debug-level
+log to `logs/bot-YYYY-MM-DD.log` (the console stays at `LOG_LEVEL`). Discovery
+counts, every scored post (relevance, audience, whether it drafted/researched),
+skips with reasons, posting decisions, and daemon session timing are all
+recorded. Secrets (API keys, passwords) are redacted.
 
-- **"Missing required environment variable"** → you didn't create `.env` or didn't fill it in. See `Configure` above.
-- **Login times out** → run with `browser.headless: false`, watch the window, solve any captcha. If you have 2FA enabled on Reddit, disable it for this account (or message me to add 2FA handling).
-- **"Session expired"** → delete the `data/browser_profile/` folder and run again to force a fresh login.
-- **No candidate posts** → loosen filters in `config.yaml`: lower `min_body_chars`, increase `max_age_hours`, or clear `keywords`.
-- **AI keeps refusing to draft a comment** → the model is being cautious. Lower `ai.min_relevance_score` from 7 to 6 to see more drafts.
-- **Shadowbanned** → stop the bot. Check `r/ShadowBan` for how to verify. Usually means the account is too new or the comments looked too template-y. Start over with a different, slower-aged account.
+## Live web search & promotion level
+
+- `ai.promotionLevel` (`off` | `topical` | `soft_brand`) controls how
+  product-forward comments are. `topical` (default) steers toward the subject
+  area with no brand/URL; `soft_brand` may occasionally name `site.brandName`,
+  still never a URL. URLs are always stripped — they are the fastest path to a ban.
+- `ai.liveSearch: true` makes the bot run a live web search on each post's topic
+  before drafting (via `ai.searchModel`), grounding replies in current facts.
+  Off by default (it adds an API call per post).
+
+## Safe First Run
+
+The default config is safe:
+
+- `posting.enabled: false`
+- `browser.headless: false`
+
+That means the bot will log in, discover posts, analyze them, and save drafts, but it will not post comments.
+
+Run it with:
+
+```bash
+npm run dev
+```
+
+You can override `posting.enabled` per run without editing the config:
+
+```bash
+npm run dev -- --dry-run   # force draft-only, never posts
+npm run dev -- --live      # force live posting on
+npm run dev -- --help      # show options
+```
+
+On the first run:
+
+- a Chromium window opens
+- Reddit login loads
+- if a captcha appears, solve it manually
+- the browser profile is saved under `data/browser-profile`
+
+## Going Live
+
+Only enable live posting after you have reviewed drafts and the account has real history.
+
+Change [config.yaml](/Users/etech/Desktop/zach-bot/config.yaml):
+
+```yaml
+posting:
+  enabled: true
+  dailyCap: 1
+  minGapMinutes: 180
+  maxGapMinutes: 360
+```
+
+The live workflow then becomes:
+
+1. log in using the saved browser profile
+2. lurk in a few unrelated subreddits
+3. discover recent candidate posts
+4. score and draft with OpenAI
+5. pick top drafts
+6. post comments through Reddit UI automation
+7. wait randomized cooldown periods between comments
+
+## Configuration
+
+Main knobs in [config.yaml](/Users/etech/Desktop/zach-bot/config.yaml):
+
+- `audiences`: subreddit → audience groups used for product-tailored comments
+- `site`: product website to scrape (`baseUrl`, `maxPages`, `catalogPath`)
+- `subreddits`: fallback flat list, used only if `audiences` is empty
+- `discovery.keywords`: optional topic filter
+- `ai.minRelevanceScore`: stricter or looser model threshold
+- `posting.enabled`: draft-only vs live posting
+- `posting.dailyCap`: daily posting ceiling
+- `humanize.*`: lurk, skip, upvote, and timing behavior
+- `browser.headless`: whether the browser is visible
+
+## Development
+
+```bash
+npm run check   # typecheck (tsc --noEmit)
+npm test        # run the Vitest unit suite
+npm run build   # compile to dist/
+npm run scrape  # rebuild the product catalog from the website
+```
+
+Unit tests cover the pure decision logic in `policy.ts` (candidate filtering,
+posting gates, active-hours and cooldown windows) and the draft validation in
+`openai-analyzer.ts` (relevance threshold, length clamping, URL/AI-tell safety
+filter). No network or browser is required to run them.
+
+## Acting like a human (anti-detection)
+
+The bot is built to look like a real person browsing, not a script:
+
+- **Patched engine** — runs on `rebrowser-playwright`, which closes the CDP
+  `Runtime.enable` leak that vanilla automation exposes regardless of the
+  `navigator.webdriver` patch.
+- **Real Chrome** — launches your installed Google Chrome (`browser.channel: chrome`)
+  for an authentic fingerprint, falling back to bundled Chromium if absent. The
+  user agent is the browser's own, so there is no UA/platform mismatch.
+- **Human input** — the cursor moves to targets along eased cubic-bezier paths
+  before clicking, typing has variable speed with occasional typos that get
+  backspaced and corrected, and reading dwell scales with the length of the post.
+- **Feed-native discovery** — posts are read from the rendered feed DOM
+  (`shreddit-post` elements) the way a person scrolling would see them, instead
+  of hitting Reddit's `.json` endpoints (which a logged-in session never does).
+- **Conservative cadence** — randomized timing, lurking in unrelated subreddits,
+  active-hours windows, per-subreddit cooldowns, daily caps, and random skips.
+
+### Session persistence
+
+Login state is saved automatically. The browser runs against a persistent
+Chrome profile at `data/browser-profile`, so cookies and the logged-in session
+survive between runs — the bot only falls back to the `REDDIT_USERNAME` /
+`REDDIT_PASSWORD` credentials when no valid session exists. You typically log in
+(and solve any captcha) once.
+
+### Proxy (optional)
+
+Set `PROXY_SERVER` (and optionally `PROXY_USERNAME` / `PROXY_PASSWORD`) in `.env`
+to route the browser through a residential proxy — the single biggest factor for
+account longevity. Left unset, the bot uses the local connection.
+
+## Notes
+
+- SQLite state lives at `data/state.db`.
+- Browser cookies and login state live at `data/browser-profile`.
+- This bot intentionally does not inject product links or promotional URLs.
+- New Reddit UI changes can break selectors, so the posting layer is written to prefer old Reddit when configured.

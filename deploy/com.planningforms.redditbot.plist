@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS launchd job: runs the Reddit bot twice a day (10:00 and 15:00 local).
+  The bot's internal daily cap/gaps keep it to a safe volume regardless.
+
+  SETUP:
+    1. Edit the two absolute paths below to match this machine.
+    2. cp deploy/com.planningforms.redditbot.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.planningforms.redditbot.plist
+    4. To stop: launchctl unload ~/Library/LaunchAgents/com.planningforms.redditbot.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.planningforms.redditbot</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <!-- EDIT: absolute path to deploy/run-daily.sh on this machine -->
+    <string>/Users/etech/Desktop/zach-bot/deploy/run-daily.sh</string>
+  </array>
+
+  <!-- EDIT: absolute path to the project root on this machine -->
+  <key>WorkingDirectory</key>
+  <string>/Users/etech/Desktop/zach-bot</string>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key><integer>10</integer>
+      <key>Minute</key><integer>0</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>15</integer>
+      <key>Minute</key><integer>0</integer>
+    </dict>
+  </array>
+
+  <key>StandardOutPath</key>
+  <string>/Users/etech/Desktop/zach-bot/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/etech/Desktop/zach-bot/logs/launchd.err.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>
