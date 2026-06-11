@@ -81,6 +81,9 @@ const browserSchema = z.object({
 const runtimeSchema = z.object({
   databasePath: z.string().default("data/state.db"),
   maxAnalyzePerRun: z.number().int().min(1).default(25),
+  // Cap how many subreddits are visited per session. The full list is shuffled
+  // first, so every subreddit gets covered over time. 0 = no cap (visit all).
+  maxSubredditsPerSession: z.number().int().min(0).default(0),
 });
 
 // Self-protection: re-check recently posted comments and back off if Reddit is

@@ -13,23 +13,271 @@ site:
   # Brand name, used only when ai.promotionLevel is "soft_brand".
   brandName: Planning Forms
 
-# Audience groups: which subreddits map to which audience, and (optionally) an
-# explicit product name from the catalog. If `product` is omitted, products are
-# matched to a group by their distilled `audience` field. Comments are kept
-# topical (no brand name, no URLs) per the agreed promotion stance.
+# Audience groups: which subreddits map to which audience.
+# 9 groups, ~100 subreddits. runtime.maxSubredditsPerSession (20) caps how many
+# are visited per session — the list is shuffled so all rotate over time.
 audiences:
+
+  # ── Group 1: Estate Planning & Legal ─────────────────────────────────────
   - label: estate planning
-    subreddits: [EstatePlanning, legaladvice, personalfinance]
-    keywords: [will, estate, probate, inheritance, trust, executor, beneficiary, intestate, power of attorney]
+    allowBrand: false
+    subreddits:
+      - EstatePlanning
+      - legaladvice
+      - personalfinance
+      - Bogleheads
+      - tax
+      - LifeInsurance
+      - LegalAdviceOffTopic
+      - financialplanning
+      - investing
+      - Money
+      - whitecoatinvestor
+      - RealEstate
+      - povertyfinance
+      - Accounting
+      - legaladvicecanada
+    keywords:
+      - will
+      - estate
+      - probate
+      - inheritance
+      - trust
+      - executor
+      - beneficiary
+      - intestate
+      - power of attorney
+      - living will
+      - advance directive
+      - healthcare proxy
+      - estate tax
+      - joint tenancy
+      - revocable trust
+
+  # ── Group 2: Retirement Planning ─────────────────────────────────────────
   - label: retirement planning
-    subreddits: [retirement, financialindependence, personalfinance]
-    keywords: [retirement, 401k, ira, pension, social security, annuity, estate, beneficiary]
+    allowBrand: false
+    subreddits:
+      - retirement
+      - financialindependence
+      - FIRE
+      - leanFIRE
+      - fatFIRE
+      - ChubbyFIRE
+      - retirees
+      - EarlyRetirement
+      - SocialSecurity
+      - dividends
+      - personalfinance
+    keywords:
+      - retirement
+      - 401k
+      - ira
+      - pension
+      - social security
+      - annuity
+      - estate
+      - beneficiary
+      - RMD
+      - early retirement
+      - FIRE
+      - required minimum distribution
+
+  # ── Group 3: Caring for Aging Parents ────────────────────────────────────
   - label: caring for aging parents
-    subreddits: [AgingParents, CaregiverSupport, eldercare, dementia]
-    keywords: [aging parent, elderly, caregiver, power of attorney, guardianship, nursing home, advance directive, will]
+    allowBrand: false
+    subreddits:
+      - AgingParents
+      - CaregiverSupport
+      - eldercare
+      - dementia
+      - Alzheimers
+      - ALS
+      - hospice
+      - medicare
+      - Medicaid
+      - lewyBody
+      - parkinsons
+      - AgingRelatives
+      - SeniorLiving
+      - SNF
+    keywords:
+      - aging parent
+      - elderly
+      - caregiver
+      - power of attorney
+      - guardianship
+      - nursing home
+      - advance directive
+      - will
+      - dementia
+      - hospice
+      - memory care
+      - end of life
+      - assisted living
+      - skilled nursing
+
+  # ── Group 4: Parents of College Students ─────────────────────────────────
   - label: parents of college students
-    subreddits: [CollegeParents, Parenting, paying_for_college]
-    keywords: [college, turning 18, young adult, power of attorney, healthcare proxy, FERPA, HIPAA, emergency]
+    allowBrand: false
+    subreddits:
+      - CollegeParents
+      - Parenting
+      - paying_for_college
+      - college
+      - ApplyingToCollege
+      - mommit
+      - daddit
+      - Parents
+      - Adulting
+      - college_advice
+    keywords:
+      - college
+      - turning 18
+      - young adult
+      - power of attorney
+      - healthcare proxy
+      - FERPA
+      - HIPAA
+      - emergency
+      - dorm
+      - freshman
+      - 18 year old
+
+  # ── Group 5: Health Challenges & Chronic Illness ─────────────────────────
+  - label: health and chronic illness
+    allowBrand: false
+    subreddits:
+      - CancerSupport
+      - ChronicIllness
+      - cancer
+      - breastcancer
+      - ALS
+      - MultipleSclerosis
+      - disability
+      - ChronicPain
+      - lymphoma
+      - leukemia
+      - braincancer
+      - ovariancancer
+      - prostate
+      - COPD
+    keywords:
+      - advance directive
+      - healthcare proxy
+      - power of attorney
+      - living will
+      - medical decisions
+      - disability
+      - chronic illness
+      - diagnosis
+      - prognosis
+      - terminal
+      - treatment decisions
+
+  # ── Group 6: Veterans & Military Families ────────────────────────────────
+  - label: veterans and military
+    allowBrand: false
+    subreddits:
+      - Veterans
+      - Military
+      - VeteransBenefits
+      - navy
+      - army
+      - AirForce
+      - nationalguard
+      - USMC
+      - coastguard
+      - Militaryfamilies
+    keywords:
+      - VA benefits
+      - military estate planning
+      - power of attorney
+      - deployment
+      - will
+      - JAG
+      - SCRA
+      - survivor benefits
+      - military family
+      - servicemember
+
+  # ── Group 7: Life Transitions (Death, Divorce, Loss) ─────────────────────
+  - label: life transitions and grief
+    allowBrand: false
+    subreddits:
+      - divorce
+      - GriefSupport
+      - widowers
+      - widows
+      - SingleParents
+      - stepparents
+      - greydivorce
+      - survivinggrief
+      - EstrangedAdultChildren
+      - JUSTNOMIL
+    keywords:
+      - divorce
+      - death
+      - inheritance
+      - estate
+      - will
+      - beneficiary
+      - survivor
+      - grief
+      - remarriage
+      - estate planning after divorce
+      - intestate
+      - probate
+
+  # ── Group 8: Small Business & Self-Employed ───────────────────────────────
+  - label: small business owners
+    allowBrand: false
+    subreddits:
+      - smallbusiness
+      - Entrepreneur
+      - selfemployed
+      - freelance
+      - startups
+      - sweatystartup
+      - EntrepreneurRideAlong
+      - business
+    keywords:
+      - business succession
+      - estate planning
+      - self-employed
+      - LLC
+      - trust
+      - business owner
+      - sole proprietor
+      - buy-sell agreement
+      - succession plan
+      - business assets
+
+  # ── Group 9: New Homeowners & Young Families ──────────────────────────────
+  - label: new homeowners and young families
+    allowBrand: false
+    subreddits:
+      - FirstTimeHomeBuyer
+      - homeowners
+      - Mortgages
+      - NewParents
+      - beyondthebump
+      - weddingplanning
+      - Marriage
+      - pregnant
+      - predaddit
+      - BabyBumps
+    keywords:
+      - will
+      - estate planning
+      - beneficiary
+      - life insurance
+      - first home
+      - new baby
+      - married
+      - guardianship
+      - minor children
+      - joint ownership
 
 discovery:
   sortRotation:
@@ -120,6 +368,16 @@ postCreation:
     - AgingParents
     - retirement
     - financialindependence
+    - Bogleheads
+    - CaregiverSupport
+    - legaladvice
+    - GriefSupport
+    - Parenting
+    - Veterans
+    - smallbusiness
+    - divorce
+    - ChronicIllness
+    - homeowners
   postTypes: [story, educational, discussion, checklist]
   # Don't post to the same subreddit twice within this window.
   subredditCooldownDays: 14
@@ -168,6 +426,9 @@ browser:
 runtime:
   databasePath: data/state.db
   maxAnalyzePerRun: 25
+  # Visit 20 random subreddits per session from the full ~100 pool.
+  # Full rotation happens over ~5 sessions (every few hours).
+  maxSubredditsPerSession: 20
 
 # Self-protection: re-check recently posted comments and back off to draft-only
 # if Reddit is removing too many (a sign the account is too new / low-karma).

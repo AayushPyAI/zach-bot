@@ -133,7 +133,13 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
         targets.sort(() => Math.random() - 0.5);
       }
 
-      for (const target of targets) {
+      // With a large subreddit pool, cap how many are visited per session so
+      // runs stay fast. The shuffle above ensures rotation across all subs.
+      const maxPerSession = eff.runtime.maxSubredditsPerSession;
+      const sessionTargets = maxPerSession > 0 ? targets.slice(0, maxPerSession) : targets;
+      logger.info({ total: targets.length, thisSession: sessionTargets.length }, "Subreddit targets for this session");
+
+      for (const target of sessionTargets) {
         const sort = pickSort(eff);
         let discovered: RedditPost[] = [];
         try {
