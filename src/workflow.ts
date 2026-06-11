@@ -21,6 +21,11 @@ import {
 import { RedditBrowser } from "./reddit-browser.js";
 import { discoverPosts, readPostBody } from "./reddit-discovery.js";
 import { AnalysisResult, RedditPost, StoredPost } from "./types.js";
+import { CompetitorMonitor } from "./competitor-monitor.js";
+import { processFollowUps, scheduleFollowUp } from "./follow-up.js";
+import { PollCreator } from "./poll-creator.js";
+import { CrossPoster } from "./cross-poster.js";
+import { checkAmaReadiness } from "./ama-tracker.js";
 
 export interface RunOptions {
   /** CLI override: true = force live, false = force draft-only, null = follow config/ramp. */
@@ -119,6 +124,17 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
       }
 
       await maybeLurk(browser, eff);
+
+      // Scan for competitor mentions — high buying-intent threads added to queue.
+      if (eff.competitorMonitor.enabled) {
+        try {
+          const cm = new CompetitorMonitor(eff);
+          const found = await cm.scanCompetitors(db);
+          if (found > 0) logger.info({ found }, "Competitor mentions added to queue");
+        } catch (error) {
+          logger.warn({ error: String(error) }, "Competitor monitor failed, continuing");
+        }
+      }
 
       const newPosts: RedditPost[] = [];
       // Build (subreddit, audience) targets. Prefer the audience groups; fall
@@ -258,6 +274,11 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
           "Selected draft",
         );
 
+        // Append DM invite CTA on posts with high buying intent.
+        if (eff.dmCTA.enabled && (item.analysis.intent ?? 0) >= eff.dmCTA.intentThreshold) {
+          item.draft = item.draft + "\n\n" + eff.dmCTA.message;
+        }
+
         if (!eff.posting.enabled) {
           db.markCommented(item.post.id, true);
           logger.info({ draft: item.draft }, "Draft only mode");
@@ -267,6 +288,7 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
         const success = await publishComment(browser, eff, item.post, item.draft);
         if (success) {
           db.markCommented(item.post.id, false);
+          await scheduleFollowUp(db, item.post.id, item.post.url, item.post.subreddit);
           const waitMinutes = randomBetween(eff.posting.minGapMinutes, Math.max(eff.posting.minGapMinutes, eff.posting.maxGapMinutes))
             + randomBetween(0, eff.posting.jitterMinutes);
           logger.info({ waitMinutes }, "Sleeping before next comment");
@@ -282,6 +304,40 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
         await maybeCreatePost(browser, eff, db, knowledge);
       } catch (error) {
         logger.warn({ error: String(error) }, "Post creation failed; session continues");
+      }
+
+      // Cross-post a recent original post to a related subreddit.
+      if (eff.crossPosting.enabled) {
+        try {
+          const cp = new CrossPoster(eff, eff.openAiApiKey);
+          await cp.maybeCrossPost(browser, db);
+        } catch (error) {
+          logger.warn({ error: String(error) }, "Cross-poster failed, continuing");
+        }
+      }
+
+      // Create a poll if subreddit is eligible (cooldown + weekly cap).
+      if (eff.pollCreationV2.enabled && eff.posting.enabled) {
+        try {
+          const pc = new PollCreator(eff, eff.openAiApiKey);
+          await pc.maybeCreatePoll(browser, db);
+        } catch (error) {
+          logger.warn({ error: String(error) }, "Poll creation failed, continuing");
+        }
+      }
+
+      // Re-visit threads we commented on at 48h and 7d to re-engage.
+      try {
+        await processFollowUps(browser, db, eff, analyzer, knowledge);
+      } catch (error) {
+        logger.warn({ error: String(error) }, "Follow-up processing failed, continuing");
+      }
+
+      // AMA readiness tracker — logs milestone progress, drafts content when ready.
+      try {
+        await checkAmaReadiness(db, eff, eff.openAiApiKey);
+      } catch (error) {
+        logger.warn({ error: String(error) }, "AMA tracker failed, continuing");
       }
     });
   } finally {

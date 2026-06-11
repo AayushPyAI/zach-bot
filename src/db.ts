@@ -67,6 +67,48 @@ CREATE TABLE IF NOT EXISTS account_snapshots (
   posting INTEGER NOT NULL,
   daily_cap INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS follow_up_queue (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  post_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  subreddit TEXT NOT NULL,
+  commented_ts INTEGER NOT NULL,
+  check_48h_ts INTEGER NOT NULL,
+  check_7d_ts INTEGER NOT NULL,
+  checked_48h INTEGER NOT NULL DEFAULT 0,
+  checked_7d INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS cross_posts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_post_id INTEGER NOT NULL,
+  source_subreddit TEXT NOT NULL,
+  target_subreddit TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_ts INTEGER NOT NULL,
+  url TEXT,
+  reddit_post_id TEXT,
+  dry_run INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS polls_created (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  subreddit TEXT NOT NULL,
+  question TEXT NOT NULL,
+  options TEXT NOT NULL,
+  created_ts INTEGER NOT NULL,
+  url TEXT,
+  reddit_post_id TEXT,
+  dry_run INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS kv_store (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_ts INTEGER NOT NULL
+);
 `;
 
 export class StateDb {
@@ -300,6 +342,155 @@ export class StateDb {
       WHERE subreddit = ? AND dry_run = 0
     `).get(subreddit) as { ts: number | null };
     return row.ts;
+  }
+
+  // ── Follow-up queue ────────────────────────────────────────────────────────
+
+  scheduleFollowUp(postId: string, url: string, subreddit: string, commentedTs: number): void {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO follow_up_queue (post_id, url, subreddit, commented_ts, check_48h_ts, check_7d_ts)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(postId, url, subreddit, commentedTs, commentedTs + 172_800, commentedTs + 604_800);
+  }
+
+  getDueFollowUps(nowTs: number, limit = 3): Array<{ id: number; post_id: string; url: string; subreddit: string; check_48h: boolean; check_7d: boolean }> {
+    const rows = this.db.prepare(`
+      SELECT id, post_id, url, subreddit, check_48h_ts, check_7d_ts, checked_48h, checked_7d
+      FROM follow_up_queue
+      WHERE (checked_48h = 0 AND check_48h_ts <= ?) OR (checked_7d = 0 AND check_7d_ts <= ?)
+      LIMIT ?
+    `).all(nowTs, nowTs, limit) as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: Number(r.id),
+      post_id: String(r.post_id),
+      url: String(r.url),
+      subreddit: String(r.subreddit),
+      check_48h: Number(r.checked_48h) === 0 && Number(r.check_48h_ts) <= nowTs,
+      check_7d: Number(r.checked_7d) === 0 && Number(r.check_7d_ts) <= nowTs,
+    }));
+  }
+
+  markFollowUpChecked(id: number, which: "48h" | "7d"): void {
+    const col = which === "48h" ? "checked_48h" : "checked_7d";
+    this.db.prepare(`UPDATE follow_up_queue SET ${col} = 1 WHERE id = ?`).run(id);
+  }
+
+  // ── Cross-posts ────────────────────────────────────────────────────────────
+
+  saveCrossPost(data: {
+    sourcePostId: number;
+    sourceSubreddit: string;
+    targetSubreddit: string;
+    title: string;
+    body: string;
+    dryRun: boolean;
+    url?: string;
+    redditPostId?: string;
+  }): void {
+    this.db.prepare(`
+      INSERT INTO cross_posts (source_post_id, source_subreddit, target_subreddit, title, body, created_ts, url, reddit_post_id, dry_run)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.sourcePostId,
+      data.sourceSubreddit,
+      data.targetSubreddit,
+      data.title,
+      data.body,
+      Math.floor(Date.now() / 1000),
+      data.url ?? null,
+      data.redditPostId ?? null,
+      data.dryRun ? 1 : 0,
+    );
+  }
+
+  getRecentCreatedPosts(withinDays: number): Array<{ id: number; subreddit: string; title: string; body: string; created_ts: number }> {
+    const cutoff = Math.floor(Date.now() / 1000) - withinDays * 86_400;
+    const rows = this.db.prepare(`
+      SELECT id, subreddit, title, body, created_ts FROM created_posts
+      WHERE dry_run = 0 AND created_ts >= ?
+      ORDER BY created_ts DESC
+    `).all(cutoff) as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: Number(r.id),
+      subreddit: String(r.subreddit),
+      title: String(r.title),
+      body: String(r.body),
+      created_ts: Number(r.created_ts),
+    }));
+  }
+
+  getCrossPostedSubreddits(sourcePostId: number): string[] {
+    const rows = this.db.prepare(`SELECT target_subreddit FROM cross_posts WHERE source_post_id = ?`).all(sourcePostId) as Array<{ target_subreddit: string }>;
+    return rows.map((r) => r.target_subreddit);
+  }
+
+  // ── Polls ──────────────────────────────────────────────────────────────────
+
+  savePoll(data: {
+    subreddit: string;
+    question: string;
+    options: string[];
+    dryRun: boolean;
+    url?: string;
+    redditPostId?: string;
+  }): void {
+    this.db.prepare(`
+      INSERT INTO polls_created (subreddit, question, options, created_ts, url, reddit_post_id, dry_run)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.subreddit,
+      data.question,
+      JSON.stringify(data.options),
+      Math.floor(Date.now() / 1000),
+      data.url ?? null,
+      data.redditPostId ?? null,
+      data.dryRun ? 1 : 0,
+    );
+  }
+
+  pollsThisWeek(subreddit: string): number {
+    const cutoff = Math.floor(Date.now() / 1000) - 7 * 86_400;
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS count FROM polls_created WHERE subreddit = ? AND dry_run = 0 AND created_ts >= ?
+    `).get(subreddit, cutoff) as { count: number };
+    return row.count;
+  }
+
+  lastPollTimestamp(subreddit: string): number | null {
+    const row = this.db.prepare(`
+      SELECT MAX(created_ts) AS ts FROM polls_created WHERE subreddit = ? AND dry_run = 0
+    `).get(subreddit) as { ts: number | null };
+    return row.ts;
+  }
+
+  // ── Key-value store ────────────────────────────────────────────────────────
+
+  saveKv(key: string, value: string): void {
+    this.db.prepare(`INSERT OR REPLACE INTO kv_store (key, value, updated_ts) VALUES (?, ?, ?)`).run(key, value, Math.floor(Date.now() / 1000));
+  }
+
+  getKv(key: string): string | null {
+    const row = this.db.prepare(`SELECT value FROM kv_store WHERE key = ?`).get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  amaReadinessLogged(): boolean {
+    return this.getKv("ama_draft") !== null;
+  }
+
+  // ── Account snapshot getter ────────────────────────────────────────────────
+
+  getLatestAccountSnapshot(): { ageDays: number; totalKarma: number; commentKarma: number; stage: string } | null {
+    const row = this.db.prepare(`
+      SELECT age_days, total_karma, comment_karma, stage FROM account_snapshots ORDER BY ts DESC LIMIT 1
+    `).get() as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      ageDays: Number(row.age_days),
+      totalKarma: Number(row.total_karma),
+      commentKarma: Number(row.comment_karma),
+      stage: String(row.stage),
+    };
   }
 }
 

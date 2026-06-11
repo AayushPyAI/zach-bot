@@ -162,6 +162,32 @@ const postCreationSchema = z.object({
   maxBodyChars: z.number().int().min(100).default(600),
 });
 
+const competitorMonitorSchema = z.object({
+  enabled: z.boolean().default(true),
+  competitors: z.array(z.string()).default(["LegalZoom", "Trust & Will", "tomorrow.me", "Willing", "FreeWill", "Fabric"]),
+  maxResultsPerSearch: z.number().int().min(1).max(100).default(25),
+});
+
+const pollCreationV2Schema = z.object({
+  enabled: z.boolean().default(false),
+  subreddits: z.array(z.string().min(1)).default(["EstatePlanning", "personalfinance", "retirement", "AgingParents", "financialindependence"]),
+  weeklyCapPerSubreddit: z.number().int().min(0).default(1),
+  cooldownDays: z.number().int().min(1).default(30),
+});
+
+const crossPostingSchema = z.object({
+  enabled: z.boolean().default(false),
+  maxCrossPostsPerOriginal: z.number().int().min(1).default(3),
+  minDelayHours: z.number().int().min(1).default(48),
+  maxDelayHours: z.number().int().min(1).default(168),
+});
+
+const dmCTASchema = z.object({
+  enabled: z.boolean().default(false),
+  intentThreshold: z.number().int().min(0).max(10).default(7),
+  message: z.string().default("Happy to walk through the specifics — feel free to DM me if you have more questions."),
+});
+
 const daemonSchema = z.object({
   sessionGapMinMinutes: z.number().int().min(1).default(40),
   sessionGapMaxMinutes: z.number().int().min(1).default(210),
@@ -198,6 +224,10 @@ const configSchema = z.object({
   daemon: daemonSchema.default({}),
   ramp: rampSchema.default({}),
   postCreation: postCreationSchema.optional(),
+  competitorMonitor: competitorMonitorSchema.default({}),
+  pollCreationV2: pollCreationV2Schema.default({}),
+  crossPosting: crossPostingSchema.default({}),
+  dmCTA: dmCTASchema.default({}),
 });
 
 export interface ProxyConfig {
