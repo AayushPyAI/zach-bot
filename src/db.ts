@@ -37,6 +37,26 @@ CREATE TABLE IF NOT EXISTS posts (
 CREATE INDEX IF NOT EXISTS idx_posts_commented_ts ON posts(commented_ts);
 CREATE INDEX IF NOT EXISTS idx_posts_subreddit_commented_ts ON posts(subreddit, commented_ts);
 
+-- Original posts created by this account (separate from comments on others' posts).
+CREATE TABLE IF NOT EXISTS created_posts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  subreddit TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  post_type TEXT NOT NULL,
+  audience TEXT,
+  created_ts INTEGER NOT NULL,
+  url TEXT,
+  reddit_post_id TEXT,
+  dry_run INTEGER NOT NULL DEFAULT 1,
+  score INTEGER,
+  comment_count INTEGER,
+  last_checked_ts INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_created_posts_created_ts ON created_posts(created_ts);
+CREATE INDEX IF NOT EXISTS idx_created_posts_subreddit ON created_posts(subreddit, created_ts);
+
 CREATE TABLE IF NOT EXISTS account_snapshots (
   ts INTEGER NOT NULL,
   age_days REAL NOT NULL,
@@ -231,6 +251,53 @@ export class StateDb {
       SELECT MAX(commented_ts) AS ts
       FROM posts
       WHERE commented = 1 AND dry_run = 0 AND subreddit = ?
+    `).get(subreddit) as { ts: number | null };
+    return row.ts;
+  }
+
+  // ── Original post creation ──────────────────────────────────────────────
+
+  saveCreatedPost(data: {
+    subreddit: string;
+    title: string;
+    body: string;
+    postType: string;
+    audience?: string;
+    dryRun: boolean;
+    url?: string;
+    redditPostId?: string;
+  }): void {
+    this.db.prepare(`
+      INSERT INTO created_posts (subreddit, title, body, post_type, audience, created_ts, url, reddit_post_id, dry_run)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.subreddit,
+      data.title,
+      data.body,
+      data.postType,
+      data.audience ?? null,
+      Math.floor(Date.now() / 1000),
+      data.url ?? null,
+      data.redditPostId ?? null,
+      data.dryRun ? 1 : 0,
+    );
+  }
+
+  /** Live (non-dry-run) posts created in the last 7 days. */
+  postsThisWeek(): number {
+    const cutoff = Math.floor(Date.now() / 1000) - 7 * 86_400;
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS count FROM created_posts
+      WHERE dry_run = 0 AND created_ts >= ?
+    `).get(cutoff) as { count: number };
+    return row.count;
+  }
+
+  /** Timestamp of the most recent live post in a given subreddit, or null. */
+  lastPostTimestampForSubreddit(subreddit: string): number | null {
+    const row = this.db.prepare(`
+      SELECT MAX(created_ts) AS ts FROM created_posts
+      WHERE subreddit = ? AND dry_run = 0
     `).get(subreddit) as { ts: number | null };
     return row.ts;
   }

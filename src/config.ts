@@ -119,17 +119,19 @@ const rampStageSchema = z.object({
   // Promotion stance for this maturity stage. Young stages stay "topical"
   // (pure value, no brand); mature, trusted stages may use "soft_brand".
   promotionLevel: z.enum(["off", "topical", "soft_brand"]).default("topical"),
+  // How many original posts this account may create per week at this stage.
+  weeklyPostCap: z.number().int().min(0).default(0),
 });
 
 export type RampStage = z.infer<typeof rampStageSchema>;
 
 // Conservative defaults. Thresholds are AND-ed (need both age and karma).
 const DEFAULT_RAMP_STAGES: RampStage[] = [
-  { name: "warmup", minAccountDays: 0, minKarma: 0, posting: false, dailyCap: 0, minGapMinutes: 360, maxGapMinutes: 600, lurkProbability: 0.85, upvoteProbability: 0.45, promotionLevel: "topical" },
-  { name: "cautious", minAccountDays: 21, minKarma: 100, posting: true, dailyCap: 1, minGapMinutes: 300, maxGapMinutes: 540, lurkProbability: 0.75, upvoteProbability: 0.4, promotionLevel: "topical" },
-  { name: "steady", minAccountDays: 45, minKarma: 500, posting: true, dailyCap: 2, minGapMinutes: 240, maxGapMinutes: 420, lurkProbability: 0.6, upvoteProbability: 0.35, promotionLevel: "topical" },
-  { name: "active", minAccountDays: 90, minKarma: 2000, posting: true, dailyCap: 3, minGapMinutes: 180, maxGapMinutes: 360, lurkProbability: 0.5, upvoteProbability: 0.3, promotionLevel: "soft_brand" },
-  { name: "established", minAccountDays: 180, minKarma: 5000, posting: true, dailyCap: 4, minGapMinutes: 150, maxGapMinutes: 300, lurkProbability: 0.4, upvoteProbability: 0.25, promotionLevel: "soft_brand" },
+  { name: "warmup", minAccountDays: 0, minKarma: 0, posting: false, dailyCap: 0, minGapMinutes: 360, maxGapMinutes: 600, lurkProbability: 0.85, upvoteProbability: 0.45, promotionLevel: "topical", weeklyPostCap: 0 },
+  { name: "cautious", minAccountDays: 21, minKarma: 100, posting: true, dailyCap: 1, minGapMinutes: 300, maxGapMinutes: 540, lurkProbability: 0.75, upvoteProbability: 0.4, promotionLevel: "topical", weeklyPostCap: 1 },
+  { name: "steady", minAccountDays: 45, minKarma: 500, posting: true, dailyCap: 2, minGapMinutes: 240, maxGapMinutes: 420, lurkProbability: 0.6, upvoteProbability: 0.35, promotionLevel: "topical", weeklyPostCap: 2 },
+  { name: "active", minAccountDays: 90, minKarma: 2000, posting: true, dailyCap: 3, minGapMinutes: 180, maxGapMinutes: 360, lurkProbability: 0.5, upvoteProbability: 0.3, promotionLevel: "soft_brand", weeklyPostCap: 3 },
+  { name: "established", minAccountDays: 180, minKarma: 5000, posting: true, dailyCap: 4, minGapMinutes: 150, maxGapMinutes: 300, lurkProbability: 0.4, upvoteProbability: 0.25, promotionLevel: "soft_brand", weeklyPostCap: 4 },
 ];
 
 const rampSchema = z.object({
@@ -139,6 +141,24 @@ const rampSchema = z.object({
 
 // 24/7 randomized operation: keep one long-running process alive and start
 // human-like sessions at randomized intervals, with occasional longer breaks.
+// Original post creation: the bot creates its own Reddit threads to build
+// account authority, drive karma, and surface the product topic organically.
+// Completely separate from comment caps — each has its own gate and frequency.
+const postCreationSchema = z.object({
+  enabled: z.boolean().default(false),
+  // Subreddits eligible for original posts (separate from comment subreddits).
+  subreddits: z.array(z.string().min(1)).default(["EstatePlanning", "personalfinance", "AgingParents"]),
+  // Post formats: story (personal narrative), educational (knowledge share),
+  // discussion (community question), checklist (actionable list).
+  postTypes: z.array(z.enum(["story", "educational", "discussion", "checklist"])).default(["story", "educational", "discussion"]),
+  // Don't post to the same subreddit more than once per this many days.
+  subredditCooldownDays: z.number().int().min(1).default(14),
+  // Global weekly cap — overridden upward by the ramp stage's weeklyPostCap.
+  weeklyPostCap: z.number().int().min(0).default(1),
+  minBodyChars: z.number().int().min(50).default(150),
+  maxBodyChars: z.number().int().min(100).default(600),
+});
+
 const daemonSchema = z.object({
   sessionGapMinMinutes: z.number().int().min(1).default(40),
   sessionGapMaxMinutes: z.number().int().min(1).default(210),
@@ -174,6 +194,7 @@ const configSchema = z.object({
   recheck: recheckSchema.default({}),
   daemon: daemonSchema.default({}),
   ramp: rampSchema.default({}),
+  postCreation: postCreationSchema.optional(),
 });
 
 export interface ProxyConfig {

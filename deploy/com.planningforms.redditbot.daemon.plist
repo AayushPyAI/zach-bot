@@ -5,11 +5,10 @@
   on a fixed schedule. KeepAlive restarts it if it ever exits.
 
   SETUP:
-    1. Edit the two absolute paths below to match this machine.
-    2. Build once:  npm run build   (the daemon below runs the compiled code)
-    3. cp deploy/com.planningforms.redditbot.daemon.plist ~/Library/LaunchAgents/
-    4. launchctl load ~/Library/LaunchAgents/com.planningforms.redditbot.daemon.plist
-    5. To stop: launchctl unload ~/Library/LaunchAgents/com.planningforms.redditbot.daemon.plist
+    1. Build once:  npm run build   (the daemon below runs the compiled code)
+    2. cp deploy/com.planningforms.redditbot.daemon.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.planningforms.redditbot.daemon.plist
+    4. To stop: launchctl unload ~/Library/LaunchAgents/com.planningforms.redditbot.daemon.plist
 
   Use this OR the cron/single-run job — not both.
 -->
@@ -20,14 +19,20 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <!-- EDIT: absolute path to deploy/run-loop.sh on this machine -->
-    <string>/Users/etech/Desktop/zach-bot/deploy/run-loop.sh</string>
+    <string>/Users/etech/.local/node-22/bin/node</string>
+    <string>/Users/etech/Desktop/zach-bot/dist/index.js</string>
+    <string>--loop</string>
+    <string>--live</string>
   </array>
 
-  <!-- EDIT: absolute path to the project root on this machine -->
   <key>WorkingDirectory</key>
   <string>/Users/etech/Desktop/zach-bot</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/etech/.local/node-22/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
 
   <key>RunAtLoad</key>
   <true/>

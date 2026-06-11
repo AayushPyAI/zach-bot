@@ -3,11 +3,13 @@ import path from "node:path";
 import { fetchAccountStats } from "./account.js";
 import { AppConfig, AudienceGroup } from "./config.js";
 import { publishComment } from "./comment-publisher.js";
+import { PostGenerator, PostType } from "./post-generator.js";
+import { publishPost } from "./post-publisher.js";
 import { StateDb } from "./db.js";
 import { recheckComments } from "./engagement.js";
 import { logger } from "./logger.js";
 import { OpenAiAnalyzer, PromotionLevel } from "./openai-analyzer.js";
-import { loadProductKnowledge } from "./products.js";
+import { loadProductKnowledge, ProductKnowledge } from "./products.js";
 import { selectStage } from "./ramp.js";
 import {
   evaluateContent,
@@ -65,6 +67,10 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
           eff.humanize.upvoteProbability = stage.upvoteProbability;
           // Promotion stance follows account maturity (young = topical, no brand).
           eff.ai.promotionLevel = stage.promotionLevel;
+          // Post creation cap scales with ramp stage.
+          if (eff.postCreation) {
+            eff.postCreation.weeklyPostCap = stage.weeklyPostCap;
+          }
           db.recordAccountSnapshot({ ...stats, stage: stage.name, posting: stage.posting, dailyCap: stage.dailyCap });
           logger.info(
             {
@@ -263,6 +269,14 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
           db.markSkipped(item.post.id, "post not confirmed");
         }
       }
+
+      // After the comment pass, attempt to create an original post if the
+      // weekly cap and subreddit cooldown allow it.
+      try {
+        await maybeCreatePost(browser, eff, db, knowledge);
+      } catch (error) {
+        logger.warn({ error: String(error) }, "Post creation failed; session continues");
+      }
     });
   } finally {
     db.close();
@@ -304,8 +318,13 @@ async function maybeLurk(browser: RedditBrowser, config: AppConfig): Promise<voi
   const shuffled = [...config.humanize.lurkSubreddits].sort(() => Math.random() - 0.5).slice(0, total);
 
   for (const subreddit of shuffled) {
-    await browser.lurkSubreddit(subreddit);
-    await browser.tryUpvote(config.humanize.upvoteProbability);
+    try {
+      await browser.lurkSubreddit(subreddit);
+      await browser.tryUpvote(config.humanize.upvoteProbability);
+    } catch (error) {
+      // Reddit SPA can destroy the navigation context mid-lurk; skip and continue.
+      logger.warn({ subreddit, error: String(error) }, "Lurk navigation hiccup, skipping subreddit");
+    }
   }
 }
 
@@ -315,4 +334,93 @@ function randomBetween(min: number, max: number): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Attempt to create an original Reddit post for this session.
+ *
+ * Gates (all must pass):
+ *  1. postCreation.enabled is true in config
+ *  2. eff.posting.enabled — only post during active hours / non-throttled runs
+ *  3. weeklyPostCap > 0 (ramp may set this to 0 for young/low-karma accounts)
+ *  4. Fewer live posts than weeklyPostCap in the last 7 days
+ *  5. Target subreddit not posted to within subredditCooldownDays
+ */
+async function maybeCreatePost(
+  browser: RedditBrowser,
+  eff: AppConfig,
+  db: StateDb,
+  knowledge: ProductKnowledge,
+): Promise<void> {
+  const pc = eff.postCreation;
+  if (!pc?.enabled || !eff.posting.enabled) return;
+
+  const weekCap = pc.weeklyPostCap;
+  if (weekCap <= 0) {
+    logger.debug("Post creation: weekly cap is 0 for this ramp stage; skipping");
+    return;
+  }
+
+  const postsThisWeek = db.postsThisWeek();
+  if (postsThisWeek >= weekCap) {
+    logger.info({ postsThisWeek, weekCap }, "Weekly post cap reached; skipping post creation this session");
+    return;
+  }
+
+  // Find subreddits not recently posted to
+  const cooldownSecs = pc.subredditCooldownDays * 86_400;
+  const nowSecs = Math.floor(Date.now() / 1000);
+  const eligible = pc.subreddits.filter((sub) => {
+    const last = db.lastPostTimestampForSubreddit(sub);
+    return !last || nowSecs - last >= cooldownSecs;
+  });
+
+  if (eligible.length === 0) {
+    logger.info("All post-creation subreddits in cooldown; skipping this session");
+    return;
+  }
+
+  const subreddit = eligible[Math.floor(Math.random() * eligible.length)]!;
+  const postType = (pc.postTypes[Math.floor(Math.random() * pc.postTypes.length)] ?? "educational") as PostType;
+  const group = eff.audiences.find((g) =>
+    g.subreddits.some((s) => s.toLowerCase() === subreddit.toLowerCase()),
+  );
+  const audience = group?.label ?? "people thinking about estate planning";
+  const guidance = knowledge.guidanceFor(group);
+
+  logger.info({ subreddit, postType, audience }, "Generating original post for publishing");
+
+  const generator = new PostGenerator(eff);
+  const generated = await generator.generate(subreddit, audience, postType, guidance ?? undefined);
+
+  if (!generated) {
+    logger.warn({ subreddit, postType }, "Post generation returned nothing; skipping");
+    return;
+  }
+
+  if (generated.body.length < pc.minBodyChars) {
+    logger.warn({ bodyLen: generated.body.length, min: pc.minBodyChars, subreddit }, "Generated body too short; skipping");
+    return;
+  }
+
+  logger.info({ subreddit, postType, title: generated.title, bodyLen: generated.body.length }, "Publishing original post");
+
+  const result = await publishPost(browser, eff, subreddit as string, generated.title, generated.body);
+
+  db.saveCreatedPost({
+    subreddit: subreddit as string,
+    title: generated.title,
+    body: generated.body,
+    postType: generated.postType,
+    audience,
+    dryRun: !result.success,
+    url: result.url,
+    redditPostId: result.postId,
+  });
+
+  if (result.success) {
+    logger.info({ subreddit, url: result.url, title: generated.title }, "Original post published live");
+  } else {
+    logger.warn({ subreddit, title: generated.title }, "Post publish did not confirm; saved as draft for review");
+  }
 }

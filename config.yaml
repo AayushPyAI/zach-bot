@@ -100,13 +100,32 @@ daemon:
 ramp:
   enabled: true
   stages:
-    - { name: warmup,      minAccountDays: 0,   minKarma: 0,    posting: false, dailyCap: 0, minGapMinutes: 360, maxGapMinutes: 600, lurkProbability: 0.85, upvoteProbability: 0.45, promotionLevel: topical }
+    - { name: warmup,      minAccountDays: 0,   minKarma: 0,    posting: false, dailyCap: 0, minGapMinutes: 360, maxGapMinutes: 600, lurkProbability: 0.85, upvoteProbability: 0.45, promotionLevel: topical,    weeklyPostCap: 0 }
     # minKarma lowered to 0 so the current account (205d old, low karma) enters
     # cautious now and starts building karma + age. Entry is age-gated (21d+).
-    - { name: cautious,    minAccountDays: 21,  minKarma: 0,    posting: true,  dailyCap: 1, minGapMinutes: 300, maxGapMinutes: 540, lurkProbability: 0.75, upvoteProbability: 0.40, promotionLevel: topical }
-    - { name: steady,      minAccountDays: 45,  minKarma: 500,  posting: true,  dailyCap: 2, minGapMinutes: 240, maxGapMinutes: 420, lurkProbability: 0.60, upvoteProbability: 0.35, promotionLevel: topical }
-    - { name: active,      minAccountDays: 90,  minKarma: 2000, posting: true,  dailyCap: 3, minGapMinutes: 180, maxGapMinutes: 360, lurkProbability: 0.50, upvoteProbability: 0.30, promotionLevel: soft_brand }
-    - { name: established, minAccountDays: 180, minKarma: 5000, posting: true,  dailyCap: 4, minGapMinutes: 150, maxGapMinutes: 300, lurkProbability: 0.40, upvoteProbability: 0.25, promotionLevel: soft_brand }
+    - { name: cautious,    minAccountDays: 21,  minKarma: 0,    posting: true,  dailyCap: 1, minGapMinutes: 300, maxGapMinutes: 540, lurkProbability: 0.75, upvoteProbability: 0.40, promotionLevel: topical,    weeklyPostCap: 1 }
+    - { name: steady,      minAccountDays: 45,  minKarma: 500,  posting: true,  dailyCap: 2, minGapMinutes: 240, maxGapMinutes: 420, lurkProbability: 0.60, upvoteProbability: 0.35, promotionLevel: topical,    weeklyPostCap: 2 }
+    - { name: active,      minAccountDays: 90,  minKarma: 2000, posting: true,  dailyCap: 3, minGapMinutes: 180, maxGapMinutes: 360, lurkProbability: 0.50, upvoteProbability: 0.30, promotionLevel: soft_brand, weeklyPostCap: 3 }
+    - { name: established, minAccountDays: 180, minKarma: 5000, posting: true,  dailyCap: 4, minGapMinutes: 150, maxGapMinutes: 300, lurkProbability: 0.40, upvoteProbability: 0.25, promotionLevel: soft_brand, weeklyPostCap: 4 }
+
+# Original posts created by this account (separate from comment caps).
+# Each post is an original Reddit thread — story, educational, discussion, or
+# checklist — written to add genuine value and build account authority.
+# The ramp's weeklyPostCap overrides the value below per stage.
+postCreation:
+  enabled: true
+  subreddits:
+    - EstatePlanning
+    - personalfinance
+    - AgingParents
+    - retirement
+    - financialindependence
+  postTypes: [story, educational, discussion, checklist]
+  # Don't post to the same subreddit twice within this window.
+  subredditCooldownDays: 14
+  weeklyPostCap: 1
+  minBodyChars: 150
+  maxBodyChars: 600
 
 posting:
   enabled: false
