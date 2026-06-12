@@ -1,6 +1,7 @@
 import { AppConfig } from "./config.js";
 import { logger } from "./logger.js";
 import { StateDb } from "./db.js";
+import { RedditBrowser } from "./reddit-browser.js";
 import { RedditPost } from "./types.js";
 
 interface RedditSearchChild {
@@ -42,7 +43,7 @@ export class CompetitorMonitor {
     this.config = config;
   }
 
-  async scanCompetitors(db: StateDb): Promise<number> {
+  async scanCompetitors(db: StateDb, browser: RedditBrowser): Promise<number> {
     const cm = this.config.competitorMonitor;
     if (!cm?.enabled) return 0;
 
@@ -53,7 +54,7 @@ export class CompetitorMonitor {
       const queries = SEARCH_QUERIES[competitor] ?? [];
       for (const query of queries) {
         try {
-          const found = await this.searchQuery(query, cm.maxResultsPerSearch, db);
+          const found = await this.searchQuery(query, cm.maxResultsPerSearch, db, browser);
           totalNew += found;
           await sleep(2000);
         } catch (error) {
@@ -65,18 +66,27 @@ export class CompetitorMonitor {
     return totalNew;
   }
 
-  private async searchQuery(query: string, limit: number, db: StateDb): Promise<number> {
+  private async searchQuery(
+    query: string,
+    limit: number,
+    db: StateDb,
+    browser: RedditBrowser,
+  ): Promise<number> {
     const url = `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&sort=new&t=day&limit=${limit}`;
-    const res = await fetch(url, {
-      headers: { "User-Agent": "planningforms-bot/1.0 (estate planning; contact via reddit u/Watchdog3115)" },
-    });
 
-    if (!res.ok) {
-      logger.warn({ url, status: res.status }, "Competitor search HTTP error");
+    // Use the authenticated Chrome session so Reddit's cookies are included —
+    // raw node fetch gets 403 because it has no session.
+    const json = await browser.page.evaluate(async (fetchUrl) => {
+      const res = await fetch(fetchUrl, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    }, url) as RedditSearchResponse | null;
+
+    if (!json) {
+      logger.warn({ url }, "Competitor search: no data returned");
       return 0;
     }
 
-    const json = (await res.json()) as RedditSearchResponse;
     const children = json?.data?.children ?? [];
     let newCount = 0;
 
@@ -104,7 +114,6 @@ export class CompetitorMonitor {
       };
 
       db.saveDiscovered(post);
-      // Mark competitor posts with high relevance + intent directly
       db.recordAnalysis(d.id, {
         relevance: 9,
         intent: 9,

@@ -129,7 +129,7 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
       if (eff.competitorMonitor.enabled) {
         try {
           const cm = new CompetitorMonitor(eff);
-          const found = await cm.scanCompetitors(db);
+          const found = await cm.scanCompetitors(db, browser);
           if (found > 0) logger.info({ found }, "Competitor mentions added to queue");
         } catch (error) {
           logger.warn({ error: String(error) }, "Competitor monitor failed, continuing");

@@ -31,6 +31,17 @@ const POLL_TEMPLATES: PollTemplate[] = [
   },
 ];
 
+interface MeJson {
+  data?: { modhash?: string };
+}
+
+interface PollSubmitResponse {
+  url?: string;
+  id?: string;
+  // Some Reddit clients wrap in json.data
+  json?: { data?: { url?: string; id?: string } };
+}
+
 export class PollCreator {
   private readonly config: AppConfig;
 
@@ -45,7 +56,6 @@ export class PollCreator {
     const nowTs = Math.floor(Date.now() / 1000);
     const cooldownSecs = pc.cooldownDays * 86_400;
 
-    // Find an eligible subreddit
     const eligible = pc.subreddits.filter((sub) => {
       const weekCount = db.pollsThisWeek(sub);
       if (weekCount >= pc.weeklyCapPerSubreddit) return false;
@@ -87,109 +97,54 @@ export class PollCreator {
     subreddit: string,
     template: PollTemplate,
   ): Promise<{ success: boolean; url?: string; postId?: string }> {
-    const submitUrl = `https://www.reddit.com/r/${subreddit}/submit`;
-    await browser.idleBrowse(submitUrl);
-    await browser.page.waitForLoadState("domcontentloaded").catch(() => {});
-    await sleep(2000);
+    // Get modhash from the authenticated session.
+    const meJson = await browser.page.evaluate(async () => {
+      const res = await fetch("https://www.reddit.com/api/me.json", { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    }) as MeJson | null;
 
-    // Click the Poll tab
-    const pollTabSelectors = [
-      'button:has-text("Poll")',
-      '[data-testid="post-submit-poll-tab"]',
-      'a:has-text("Poll")',
-    ];
-    let pollTabClicked = false;
-    for (const sel of pollTabSelectors) {
-      const el = browser.page.locator(sel).first();
-      if ((await el.count()) > 0 && await el.isVisible()) {
-        await el.click();
-        pollTabClicked = true;
-        await sleep(800);
-        break;
-      }
-    }
-
-    if (!pollTabClicked) {
-      logger.warn({ subreddit }, "Poll tab not found on submit page");
+    const modhash = meJson?.data?.modhash;
+    if (!modhash) {
+      logger.warn({ subreddit }, "Poll submit: could not get modhash — likely not logged in");
       return { success: false };
     }
 
-    // Fill in the poll question as the post title
-    const titleSelectors = [
-      'textarea[placeholder*="Title"]',
-      'textarea[placeholder*="title"]',
-      '#post-title',
-      'input[placeholder*="title"]',
-    ];
-    let titleFilled = false;
-    for (const sel of titleSelectors) {
-      const el = browser.page.locator(sel).first();
-      if ((await el.count()) > 0) {
-        await el.fill(template.question);
-        titleFilled = true;
-        await sleep(500);
-        break;
-      }
-    }
-    if (!titleFilled) {
-      logger.warn({ subreddit }, "Poll title input not found");
+    await sleep(1000 + Math.random() * 1500);
+
+    const result = await browser.page.evaluate(async ({ sr, title, options, uh }) => {
+      const res = await fetch("https://www.reddit.com/api/submit_poll_post", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Modhash": uh,
+        },
+        body: JSON.stringify({
+          sr,
+          title,
+          options,
+          duration: 3,
+          nsfw: false,
+          spoiler: false,
+        }),
+      });
+      if (!res.ok) return null;
+      return res.json();
+    }, { sr: subreddit, title: template.question, options: template.options, uh: modhash }) as PollSubmitResponse | null;
+
+    // The response may nest the URL in different ways depending on Reddit's version.
+    const url = result?.url ?? result?.json?.data?.url;
+    const rawId = result?.id ?? result?.json?.data?.id;
+    // Strip the t3_ prefix if present so we store just the post ID.
+    const postId = rawId?.replace(/^t3_/, "");
+
+    if (!url) {
+      logger.warn({ subreddit, result }, "Poll submit: API returned no URL");
       return { success: false };
     }
 
-    // Fill poll options
-    for (let i = 0; i < template.options.length; i++) {
-      const optionSelectors = [
-        `input[placeholder*="Option ${i + 1}"]`,
-        `input[placeholder*="option ${i + 1}"]`,
-        `[data-testid="poll-option-${i}"] input`,
-      ];
-      let filled = false;
-      for (const sel of optionSelectors) {
-        const el = browser.page.locator(sel).first();
-        if ((await el.count()) > 0) {
-          await el.fill(template.options[i] ?? "");
-          filled = true;
-          await sleep(300);
-          break;
-        }
-      }
-      if (!filled) {
-        // Try generic nth option input
-        const inputs = browser.page.locator('input[placeholder*="option"], input[placeholder*="Option"]');
-        const count = await inputs.count();
-        if (i < count) {
-          await inputs.nth(i).fill(template.options[i] ?? "");
-          await sleep(300);
-        }
-      }
-    }
-
-    await sleep(1500);
-
-    // Submit
-    const submitSelectors = [
-      'button[type="submit"]:has-text("Post")',
-      'button:has-text("Post")',
-      'button[type="submit"]',
-    ];
-    for (const sel of submitSelectors) {
-      const btn = browser.page.locator(sel).first();
-      if ((await btn.count()) > 0 && await btn.isVisible()) {
-        await btn.click();
-        await sleep(4000);
-        break;
-      }
-    }
-
-    // Confirm by URL
-    const url = browser.page.url();
-    const match = url.match(/\/r\/[^/]+\/comments\/([a-z0-9]+)\//i);
-    if (match) {
-      const canonical = url.replace("old.reddit.com", "www.reddit.com").replace(/\?.*$/, "");
-      return { success: true, url: canonical, postId: match[1] };
-    }
-
-    return { success: false };
+    return { success: true, url, postId };
   }
 }
 
