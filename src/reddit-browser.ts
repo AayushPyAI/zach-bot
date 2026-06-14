@@ -6,7 +6,7 @@ import { AppConfig } from "./config.js";
 import { logger } from "./logger.js";
 
 /** Max time to wait for login to be confirmed, leaving room to solve a captcha by hand. */
-const LOGIN_TIMEOUT_MS = 180_000;
+const LOGIN_TIMEOUT_MS = 600_000;
 
 interface Point {
   x: number;
@@ -42,6 +42,8 @@ export class RedditBrowser {
         "--disable-blink-features=AutomationControlled",
         "--disable-dev-shm-usage",
         "--disable-infobars",
+        "--remote-debugging-port=9222",
+        "--remote-debugging-address=127.0.0.1",
       ],
       ...(this.config.browser.userAgent ? { userAgent: this.config.browser.userAgent } : {}),
       ...(this.config.proxy ? { proxy: this.config.proxy } : {}),
