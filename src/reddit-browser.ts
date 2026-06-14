@@ -44,6 +44,7 @@ export class RedditBrowser {
         "--disable-infobars",
         "--remote-debugging-port=9222",
         "--remote-debugging-address=127.0.0.1",
+        "--remote-allow-origins=*",
       ],
       ...(this.config.browser.userAgent ? { userAgent: this.config.browser.userAgent } : {}),
       ...(this.config.proxy ? { proxy: this.config.proxy } : {}),
