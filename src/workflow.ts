@@ -231,6 +231,13 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
           db.recordAnalysis(post.id, analysis);
           if (analysis.draftComment) {
             scored.push({ post, analysis, draft: analysis.draftComment });
+            // Stop analyzing once we have enough quality drafts for this session.
+            // No point spending tokens on posts beyond what the daily cap allows.
+            const draftTarget = eff.posting.enabled ? eff.posting.dailyCap * 2 : 4;
+            if (scored.length >= draftTarget) {
+              logger.info({ drafts: scored.length, cap: eff.posting.dailyCap }, "Enough quality drafts collected; stopping analysis");
+              break;
+            }
           }
           await browser.maybeMicroBreak();
         } catch (error) {

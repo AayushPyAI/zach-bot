@@ -31,17 +31,6 @@ const POLL_TEMPLATES: PollTemplate[] = [
   },
 ];
 
-interface MeJson {
-  data?: { modhash?: string };
-}
-
-interface PollSubmitResponse {
-  url?: string;
-  id?: string;
-  // Some Reddit clients wrap in json.data
-  json?: { data?: { url?: string; id?: string } };
-}
-
 export class PollCreator {
   private readonly config: AppConfig;
 
@@ -92,59 +81,75 @@ export class PollCreator {
     }
   }
 
+  /**
+   * Submit a poll via new Reddit's browser UI.
+   * Old Reddit has no poll option, so we use www.reddit.com/r/{sub}/submit
+   * and interact with the Poll tab through the browser.
+   */
   private async postPoll(
     browser: RedditBrowser,
     subreddit: string,
     template: PollTemplate,
   ): Promise<{ success: boolean; url?: string; postId?: string }> {
-    // Get modhash from the authenticated session.
-    const meJson = await browser.page.evaluate(async () => {
-      const res = await fetch("https://www.reddit.com/api/me.json", { credentials: "include" });
-      if (!res.ok) return null;
-      return res.json();
-    }) as MeJson | null;
+    const submitUrl = `https://www.reddit.com/r/${subreddit}/submit`;
+    await browser.page.goto(submitUrl, { waitUntil: "domcontentloaded" });
+    await sleep(2000 + Math.random() * 1500);
 
-    const modhash = meJson?.data?.modhash;
-    if (!modhash) {
-      logger.warn({ subreddit }, "Poll submit: could not get modhash — likely not logged in");
+    // Click the Poll tab
+    const pollTab = browser.page.locator("button:has-text('Poll'), [role='tab']:has-text('Poll')").first();
+    if ((await pollTab.count()) === 0) {
+      logger.warn({ subreddit }, "Poll submit: Poll tab not found");
       return { success: false };
     }
+    await browser.humanClick(pollTab);
+    await sleep(800 + Math.random() * 500);
 
-    await sleep(1000 + Math.random() * 1500);
-
-    const result = await browser.page.evaluate(async ({ sr, title, options, uh }) => {
-      const res = await fetch("https://www.reddit.com/api/submit_poll_post", {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Modhash": uh,
-        },
-        body: JSON.stringify({
-          sr,
-          title,
-          options,
-          duration: 3,
-          nsfw: false,
-          spoiler: false,
-        }),
-      });
-      if (!res.ok) return null;
-      return res.json();
-    }, { sr: subreddit, title: template.question, options: template.options, uh: modhash }) as PollSubmitResponse | null;
-
-    // The response may nest the URL in different ways depending on Reddit's version.
-    const url = result?.url ?? result?.json?.data?.url;
-    const rawId = result?.id ?? result?.json?.data?.id;
-    // Strip the t3_ prefix if present so we store just the post ID.
-    const postId = rawId?.replace(/^t3_/, "");
-
-    if (!url) {
-      logger.warn({ subreddit, result }, "Poll submit: API returned no URL");
+    // Fill question (title field)
+    const titleSel = "textarea[placeholder*='Title'], input[placeholder*='Title'], #post-title";
+    const titleField = browser.page.locator(titleSel).first();
+    if ((await titleField.count()) === 0) {
+      logger.warn({ subreddit }, "Poll submit: title field not found");
       return { success: false };
     }
+    await browser.humanType(titleSel, template.question, 3, 6);
+    await sleep(500 + Math.random() * 500);
 
-    return { success: true, url, postId };
+    // Fill poll options
+    for (let i = 0; i < template.options.length; i++) {
+      const optionSel = `input[placeholder*='Option ${i + 1}'], input[placeholder*='option ${i + 1}']`;
+      const optField = browser.page.locator(optionSel).first();
+      if ((await optField.count()) === 0) {
+        // Try clicking "Add Option" if field not visible
+        const addBtn = browser.page.locator("button:has-text('Add Option'), button:has-text('Add option')").first();
+        if ((await addBtn.count()) > 0) await browser.humanClick(addBtn);
+        await sleep(400);
+      }
+      if ((await browser.page.locator(optionSel).first().count()) > 0) {
+        await browser.humanType(optionSel, template.options[i]!, 3, 6);
+        await sleep(300 + Math.random() * 300);
+      }
+    }
+
+    await sleep(800 + Math.random() * 500);
+
+    // Submit
+    const submitBtn = browser.page.locator("button:has-text('Post'), button[type='submit']:has-text('Post')").first();
+    if ((await submitBtn.count()) === 0) {
+      logger.warn({ subreddit }, "Poll submit: submit button not found");
+      return { success: false };
+    }
+    await browser.humanClick(submitBtn);
+    await sleep(4000 + Math.random() * 2000);
+
+    const currentUrl = browser.page.url();
+    if (currentUrl.match(/\/r\/[^/]+\/comments\//i)) {
+      const canonical = currentUrl.replace(/\?.*$/, "");
+      const match = canonical.match(/comments\/([a-z0-9]+)/i);
+      return { success: true, url: canonical, postId: match?.[1] };
+    }
+
+    logger.warn({ subreddit, url: currentUrl }, "Poll submit: page did not navigate to new post");
+    return { success: false };
   }
 }
 

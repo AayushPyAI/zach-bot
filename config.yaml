@@ -423,7 +423,7 @@ browser:
 
 runtime:
   databasePath: data/state.db
-  maxAnalyzePerRun: 25
+  maxAnalyzePerRun: 12
   # Visit 20 random subreddits per session from the full ~100 pool.
   # Full rotation happens over ~5 sessions (every few hours).
   maxSubredditsPerSession: 20
