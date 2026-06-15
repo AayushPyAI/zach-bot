@@ -70,7 +70,17 @@ export async function publishPost(
     logger.warn({ subreddit }, "Post submit: could not find submit button in text form");
     return { success: false };
   }
-  await sleep(4000 + Math.random() * 2000);
+
+  // Wait up to 10s for Reddit to navigate away from the submit page
+  try {
+    await browser.page.waitForURL(
+      (url) => !url.toString().includes("/submit"),
+      { timeout: 10_000 },
+    );
+  } catch {
+    // Stayed on submit page — Reddit showed an inline error
+  }
+  await sleep(1000);
 
   const currentUrl = browser.page.url();
   logger.info({ subreddit, url: currentUrl }, "Post submit: checking redirect URL");
@@ -81,15 +91,26 @@ export async function publishPost(
     return { success: true, url: canonical, postId: match?.[1] };
   }
 
-  // Some moderated subs queue new-account posts for approval and redirect back
-  // to the subreddit homepage. Treat this as a submitted-pending state.
-  const pageText = (await browser.page.content()).toLowerCase();
-  if (pageText.includes("submitted") || pageText.includes("your post") || pageText.includes("being checked")) {
+  // Capture Reddit's error message so we can diagnose the failure
+  const pageData = await browser.page.evaluate(() => {
+    const errors = Array.from(
+      document.querySelectorAll<HTMLElement>(".error, .status-msg, .field-error, .cError")
+    )
+      .map((el) => el.textContent?.trim())
+      .filter(Boolean);
+    const bodySnippet = document.body?.textContent?.replace(/\s+/g, " ").trim().slice(0, 600) ?? "";
+    return { errors, bodySnippet };
+  });
+
+  logger.warn({ subreddit, url: currentUrl, redditErrors: pageData.errors, pageSnippet: pageData.bodySnippet.slice(0, 300) }, "Post submit: page after submission");
+
+  const combined = (pageData.errors.join(" ") + " " + pageData.bodySnippet).toLowerCase();
+  if (combined.includes("submitted") || combined.includes("your post") || combined.includes("being checked") || combined.includes("mod queue")) {
     logger.info({ subreddit }, "Post submit: post likely queued for mod approval");
     return { success: false };
   }
 
-  logger.warn({ subreddit, url: currentUrl }, "Post submit: unexpected page after submission");
+  logger.warn({ subreddit }, "Post submit: unexpected result — post not confirmed live");
   return { success: false };
 }
 
