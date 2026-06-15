@@ -83,21 +83,36 @@ export async function publishPost(
     logger.info({ subreddit }, "Post submit: reCAPTCHA token injected");
   }
 
-  // Click the submit button that belongs to the text-post form specifically.
-  // Old Reddit renders two .save buttons (link + text).
-  // Using :has() to target only the form containing textarea[name='text'].
-  // humanClick generates real mouse events (move + down + up) which pass
-  // Reddit's bot-detection unlike btn.click() via evaluate().
-  const textFormBtn = browser.page
-    .locator('form:has(textarea[name="text"]) button.save[type="submit"], form:has(textarea[name="text"]) button[type="submit"]')
-    .first();
+  // Find the text-form's submit button via DOM traversal, then click via
+  // page.mouse (real mouse events, no programmatic DOM click) while bypassing
+  // Playwright's strict visibility gate (old Reddit's button passes bot checks
+  // even when Playwright considers it "not visible").
+  const btnCoords = await browser.page.evaluate(() => {
+    const textArea = document.querySelector<HTMLElement>('textarea[name="text"]');
+    const form = textArea?.closest<HTMLElement>("form");
+    const btn = form?.querySelector<HTMLElement>('button.save[type="submit"], button[type="submit"]');
+    if (!btn) return null;
+    btn.scrollIntoView({ behavior: "instant", block: "center" });
+    const r = btn.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return null;
+    return { x: r.left + r.width * 0.5, y: r.top + r.height * 0.5 };
+  });
 
-  if ((await textFormBtn.count()) === 0) {
-    logger.warn({ subreddit }, "Post submit: could not find submit button in text form");
+  if (!btnCoords) {
+    logger.warn({ subreddit }, "Post submit: could not locate submit button coords in text form");
     return { success: false };
   }
 
-  await browser.humanClick(textFormBtn);
+  await sleep(400);
+  // Move to button with slight randomisation then click — real mouse events
+  await browser.page.mouse.move(
+    btnCoords.x + (Math.random() - 0.5) * 4,
+    btnCoords.y + (Math.random() - 0.5) * 4,
+  );
+  await sleep(80 + Math.random() * 120);
+  await browser.page.mouse.down();
+  await sleep(40 + Math.random() * 60);
+  await browser.page.mouse.up();
 
   // Wait up to 10s for Reddit to navigate away from the submit page
   try {
