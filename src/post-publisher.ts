@@ -31,7 +31,6 @@ export async function publishPost(
 
   const titleSel = "textarea[name='title']";
   const bodySel  = "textarea[name='text']";
-  const btnSel   = "button.save[type='submit']";
 
   // Wait up to 10s for the form — some subreddits load rules overlays first
   try {
@@ -52,13 +51,20 @@ export async function publishPost(
   await browser.humanType(bodySel, body, config.posting.typingCharsPerSecondMin, config.posting.typingCharsPerSecondMax);
   await sleep(1000 + Math.random() * 1000);
 
-  const submitBtn = browser.page.locator(btnSel).first();
-  if ((await submitBtn.count()) === 0) {
-    logger.warn({ subreddit }, "Post submit: submit button not found");
+  // Old Reddit has two .save buttons (link form + text form). Click the visible one.
+  const clicked = await browser.page.evaluate(() => {
+    for (const btn of document.querySelectorAll('button.save[type="submit"]')) {
+      if (btn instanceof HTMLElement && btn.offsetParent !== null) {
+        btn.click();
+        return true;
+      }
+    }
+    return false;
+  });
+  if (!clicked) {
+    logger.warn({ subreddit }, "Post submit: no visible submit button found");
     return { success: false };
   }
-
-  await browser.humanClick(submitBtn);
   await sleep(4000 + Math.random() * 2000);
 
   const currentUrl = browser.page.url();

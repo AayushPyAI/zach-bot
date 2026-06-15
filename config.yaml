@@ -453,7 +453,7 @@ competitorMonitor:
 # Native Reddit polls — builds engagement and account authority.
 # 1 poll per subreddit per 30 days; only fires when posting is enabled.
 pollCreationV2:
-  enabled: true
+  enabled: false
   subreddits:
     - EstatePlanning
     - personalfinance
