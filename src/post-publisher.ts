@@ -51,30 +51,45 @@ export async function publishPost(
   await browser.humanType(bodySel, body, config.posting.typingCharsPerSecondMin, config.posting.typingCharsPerSecondMax);
   await sleep(1000 + Math.random() * 1000);
 
-  // Old Reddit has two .save buttons (link form + text form). Click the visible one.
+  // Click the submit button that belongs to the text-post form specifically.
+  // Old Reddit renders two .save buttons (link + text); target the one whose
+  // parent form contains textarea[name='text'].
   const clicked = await browser.page.evaluate(() => {
-    for (const btn of document.querySelectorAll('button.save[type="submit"]')) {
-      if (btn instanceof HTMLElement && btn.offsetParent !== null) {
-        btn.click();
-        return true;
-      }
+    const textArea = document.querySelector('textarea[name="text"]');
+    const form = textArea?.closest("form");
+    const btn = form?.querySelector<HTMLElement>('button.save[type="submit"], button[type="submit"]');
+    if (btn) { btn.click(); return true; }
+    // Fallback: click whichever .save button has non-zero size
+    for (const b of document.querySelectorAll<HTMLElement>('button.save[type="submit"]')) {
+      const r = b.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) { b.click(); return true; }
     }
     return false;
   });
   if (!clicked) {
-    logger.warn({ subreddit }, "Post submit: no visible submit button found");
+    logger.warn({ subreddit }, "Post submit: could not find submit button in text form");
     return { success: false };
   }
   await sleep(4000 + Math.random() * 2000);
 
   const currentUrl = browser.page.url();
+  logger.info({ subreddit, url: currentUrl }, "Post submit: checking redirect URL");
+
   if (currentUrl.match(/\/r\/[^/]+\/comments\//i)) {
     const canonical = currentUrl.replace("old.reddit.com", "www.reddit.com").replace(/\?.*$/, "");
     const match = canonical.match(/comments\/([a-z0-9]+)/i);
     return { success: true, url: canonical, postId: match?.[1] };
   }
 
-  logger.warn({ subreddit, url: currentUrl }, "Post submit: page did not navigate to new post URL");
+  // Some moderated subs queue new-account posts for approval and redirect back
+  // to the subreddit homepage. Treat this as a submitted-pending state.
+  const pageText = (await browser.page.content()).toLowerCase();
+  if (pageText.includes("submitted") || pageText.includes("your post") || pageText.includes("being checked")) {
+    logger.info({ subreddit }, "Post submit: post likely queued for mod approval");
+    return { success: false };
+  }
+
+  logger.warn({ subreddit, url: currentUrl }, "Post submit: unexpected page after submission");
   return { success: false };
 }
 

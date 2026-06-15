@@ -362,20 +362,19 @@ postCreation:
   enabled: true
   subreddits:
     - EstatePlanning
-    - personalfinance
     - AgingParents
     - retirement
     - financialindependence
-    - Bogleheads
     - CaregiverSupport
-    - legaladvice
     - GriefSupport
     - Parenting
     - Veterans
     - smallbusiness
-    - divorce
     - ChronicIllness
     - widows
+    - povertyfinance
+    - dementia
+    - eldercare
   postTypes: [story, educational, discussion, checklist]
   # Don't post to the same subreddit twice within this window.
   subredditCooldownDays: 14
