@@ -52,24 +52,20 @@ export async function publishPost(
   await sleep(1000 + Math.random() * 1000);
 
   // Click the submit button that belongs to the text-post form specifically.
-  // Old Reddit renders two .save buttons (link + text); target the one whose
-  // parent form contains textarea[name='text'].
-  const clicked = await browser.page.evaluate(() => {
-    const textArea = document.querySelector('textarea[name="text"]');
-    const form = textArea?.closest("form");
-    const btn = form?.querySelector<HTMLElement>('button.save[type="submit"], button[type="submit"]');
-    if (btn) { btn.click(); return true; }
-    // Fallback: click whichever .save button has non-zero size
-    for (const b of document.querySelectorAll<HTMLElement>('button.save[type="submit"]')) {
-      const r = b.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) { b.click(); return true; }
-    }
-    return false;
-  });
-  if (!clicked) {
+  // Old Reddit renders two .save buttons (link + text).
+  // Using :has() to target only the form containing textarea[name='text'].
+  // humanClick generates real mouse events (move + down + up) which pass
+  // Reddit's bot-detection unlike btn.click() via evaluate().
+  const textFormBtn = browser.page
+    .locator('form:has(textarea[name="text"]) button.save[type="submit"], form:has(textarea[name="text"]) button[type="submit"]')
+    .first();
+
+  if ((await textFormBtn.count()) === 0) {
     logger.warn({ subreddit }, "Post submit: could not find submit button in text form");
     return { success: false };
   }
+
+  await browser.humanClick(textFormBtn);
 
   // Wait up to 10s for Reddit to navigate away from the submit page
   try {
