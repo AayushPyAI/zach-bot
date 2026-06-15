@@ -52,35 +52,67 @@ export async function publishPost(
   await browser.humanType(bodySel, body, config.posting.typingCharsPerSecondMin, config.posting.typingCharsPerSecondMax);
   await sleep(1000 + Math.random() * 1000);
 
-  // Solve reCAPTCHA if present (Reddit requires it for new/low-karma accounts)
-  const captchaApiKey = process.env.CAPSOLVER_API_KEY?.trim();
+  // Handle reCAPTCHA if present (Reddit requires it for new/low-karma accounts).
+  // Strategy 1 — residential proxy path: click the checkbox; on residential IPs
+  // it auto-passes without an image challenge. Wait up to 6s for the token.
+  // Strategy 2 — fallback: CapSolver API (CAPSOLVER_API_KEY env var).
   const captchaSiteKey = await browser.page.evaluate(() => {
     const el = document.querySelector<HTMLElement>("[data-sitekey]");
     return el?.dataset?.sitekey ?? null;
   });
 
   if (captchaSiteKey) {
-    if (!captchaApiKey) {
-      logger.warn({ subreddit }, "Post submit: reCAPTCHA required but CAPSOLVER_API_KEY not set — skipping post");
-      return { success: false };
-    }
-    logger.info({ subreddit }, "Post submit: reCAPTCHA detected, solving via CapSolver...");
-    const token = await solveRecaptchaV2(captchaApiKey, browser.page.url(), captchaSiteKey);
-    if (!token) {
-      logger.warn({ subreddit }, "Post submit: reCAPTCHA solve failed");
-      return { success: false };
-    }
-    // Inject token into the hidden response textarea
-    await browser.page.evaluate((t: string) => {
-      const ta = document.querySelector<HTMLTextAreaElement>("#g-recaptcha-response");
-      if (ta) {
-        ta.value = t;
-        ta.dispatchEvent(new Event("input", { bubbles: true }));
-        ta.dispatchEvent(new Event("change", { bubbles: true }));
+    logger.info({ subreddit }, "Post submit: reCAPTCHA detected, clicking checkbox...");
+
+    // Click the checkbox inside the reCAPTCHA iframe
+    try {
+      const captchaFrame = browser.page.frameLocator(
+        'iframe[src*="recaptcha/api2/anchor"], iframe[title*="reCAPTCHA"]'
+      );
+      const checkbox = captchaFrame.locator("#recaptcha-anchor");
+      if ((await checkbox.count()) > 0) {
+        await checkbox.click({ timeout: 5000 });
       }
-    }, token);
-    await sleep(500);
-    logger.info({ subreddit }, "Post submit: reCAPTCHA token injected");
+    } catch {
+      // Frame might not be accessible; fall through to token check
+    }
+
+    // Wait up to 6s for the residential IP to auto-pass the checkbox
+    let captchaToken = "";
+    for (let i = 0; i < 12; i++) {
+      await sleep(500);
+      captchaToken = await browser.page.evaluate(
+        () => (document.querySelector<HTMLTextAreaElement>("#g-recaptcha-response")?.value ?? "")
+      );
+      if (captchaToken) break;
+    }
+
+    if (captchaToken) {
+      logger.info({ subreddit }, "Post submit: reCAPTCHA passed (checkbox auto-passed via residential IP)");
+    } else {
+      // Checkbox triggered image challenge — fall back to CapSolver
+      const captchaApiKey = process.env.CAPSOLVER_API_KEY?.trim();
+      if (!captchaApiKey) {
+        logger.warn({ subreddit }, "Post submit: reCAPTCHA image challenge appeared and CAPSOLVER_API_KEY not set — skipping post");
+        return { success: false };
+      }
+      logger.info({ subreddit }, "Post submit: image challenge detected, solving via CapSolver...");
+      const token = await solveRecaptchaV2(captchaApiKey, browser.page.url(), captchaSiteKey);
+      if (!token) {
+        logger.warn({ subreddit }, "Post submit: CapSolver failed to solve reCAPTCHA");
+        return { success: false };
+      }
+      await browser.page.evaluate((t: string) => {
+        const ta = document.querySelector<HTMLTextAreaElement>("#g-recaptcha-response");
+        if (ta) {
+          ta.value = t;
+          ta.dispatchEvent(new Event("input", { bubbles: true }));
+          ta.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }, token);
+      await sleep(500);
+      logger.info({ subreddit }, "Post submit: reCAPTCHA token injected via CapSolver");
+    }
   }
 
   // Find the text-form's submit button via DOM traversal, then click via
