@@ -1,4 +1,5 @@
 import { AppConfig } from "./config.js";
+import { solveRecaptchaV2 } from "./captcha-solver.js";
 import { logger } from "./logger.js";
 import { RedditBrowser } from "./reddit-browser.js";
 
@@ -50,6 +51,37 @@ export async function publishPost(
 
   await browser.humanType(bodySel, body, config.posting.typingCharsPerSecondMin, config.posting.typingCharsPerSecondMax);
   await sleep(1000 + Math.random() * 1000);
+
+  // Solve reCAPTCHA if present (Reddit requires it for new/low-karma accounts)
+  const captchaApiKey = process.env.CAPSOLVER_API_KEY?.trim();
+  const captchaSiteKey = await browser.page.evaluate(() => {
+    const el = document.querySelector<HTMLElement>("[data-sitekey]");
+    return el?.dataset?.sitekey ?? null;
+  });
+
+  if (captchaSiteKey) {
+    if (!captchaApiKey) {
+      logger.warn({ subreddit }, "Post submit: reCAPTCHA required but CAPSOLVER_API_KEY not set — skipping post");
+      return { success: false };
+    }
+    logger.info({ subreddit }, "Post submit: reCAPTCHA detected, solving via CapSolver...");
+    const token = await solveRecaptchaV2(captchaApiKey, browser.page.url(), captchaSiteKey);
+    if (!token) {
+      logger.warn({ subreddit }, "Post submit: reCAPTCHA solve failed");
+      return { success: false };
+    }
+    // Inject token into the hidden response textarea
+    await browser.page.evaluate((t: string) => {
+      const ta = document.querySelector<HTMLTextAreaElement>("#g-recaptcha-response");
+      if (ta) {
+        ta.value = t;
+        ta.dispatchEvent(new Event("input", { bubbles: true }));
+        ta.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }, token);
+    await sleep(500);
+    logger.info({ subreddit }, "Post submit: reCAPTCHA token injected");
+  }
 
   // Click the submit button that belongs to the text-post form specifically.
   // Old Reddit renders two .save buttons (link + text).
