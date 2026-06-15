@@ -12,6 +12,11 @@ export interface PostResult {
  * Submit an original text post via old Reddit's browser form.
  * Uses the same UI approach as comment-publisher so it works even when
  * Reddit's JSON API blocks requests from datacenter IPs.
+ *
+ * Old Reddit form fields (confirmed via live inspection):
+ *   title → textarea[name='title']  (NOT an input, no #id)
+ *   body  → textarea[name='text']
+ *   submit→ button.save[type='submit']
  */
 export async function publishPost(
   browser: RedditBrowser,
@@ -21,25 +26,28 @@ export async function publishPost(
   body: string,
 ): Promise<PostResult> {
   const submitUrl = `https://old.reddit.com/r/${subreddit}/submit?selftext=true`;
-  await browser.page.goto(submitUrl, { waitUntil: "domcontentloaded" });
-  await sleep(1500 + Math.random() * 1500);
+  await browser.page.goto(submitUrl, { waitUntil: "networkidle" });
+  await sleep(2000 + Math.random() * 1500);
 
-  const titleSel = "#title, input[name='title']";
-  const bodySel = "#text, textarea[name='text']";
-  const btnSel = "form#submit-text button.save[type='submit'], form#submit-link button.save[type='submit']";
+  const titleSel = "textarea[name='title']";
+  const bodySel  = "textarea[name='text']";
+  const btnSel   = "button.save[type='submit']";
 
-  if ((await browser.page.locator(titleSel).first().count()) === 0) {
-    logger.warn({ subreddit }, "Post submit: title field not found — restricted subreddit or session expired");
+  // Wait up to 10s for the form — some subreddits load rules overlays first
+  try {
+    await browser.page.waitForSelector(titleSel, { timeout: 10_000 });
+  } catch {
+    logger.warn({ subreddit }, "Post submit: title textarea not found — subreddit may be link-only or restricted");
+    return { success: false };
+  }
+
+  if ((await browser.page.locator(bodySel).count()) === 0) {
+    logger.warn({ subreddit }, "Post submit: body textarea not found — subreddit may not allow text posts");
     return { success: false };
   }
 
   await browser.humanType(titleSel, title, config.posting.typingCharsPerSecondMin, config.posting.typingCharsPerSecondMax);
   await sleep(600 + Math.random() * 600);
-
-  if ((await browser.page.locator(bodySel).first().count()) === 0) {
-    logger.warn({ subreddit }, "Post submit: body field not found");
-    return { success: false };
-  }
 
   await browser.humanType(bodySel, body, config.posting.typingCharsPerSecondMin, config.posting.typingCharsPerSecondMax);
   await sleep(1000 + Math.random() * 1000);
@@ -60,7 +68,7 @@ export async function publishPost(
     return { success: true, url: canonical, postId: match?.[1] };
   }
 
-  logger.warn({ subreddit, url: currentUrl }, "Post submit: page did not navigate to new post");
+  logger.warn({ subreddit, url: currentUrl }, "Post submit: page did not navigate to new post URL");
   return { success: false };
 }
 
