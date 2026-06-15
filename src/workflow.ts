@@ -472,6 +472,11 @@ async function maybeCreatePost(
     return;
   }
 
+  // Enforce max length — typing a 2000-char body at 3–6 cps wastes 5+ minutes.
+  if (generated.body.length > pc.maxBodyChars) {
+    generated.body = generated.body.slice(0, pc.maxBodyChars).replace(/\s+\S*$/, "");
+  }
+
   logger.info({ subreddit, postType, title: generated.title, bodyLen: generated.body.length }, "Publishing original post");
 
   const result = await publishPost(browser, eff, subreddit as string, generated.title, generated.body);
