@@ -62,24 +62,33 @@ export async function publishPost(
   });
 
   if (captchaSiteKey) {
-    logger.info({ subreddit }, "Post submit: reCAPTCHA detected, clicking checkbox...");
+    // Wait up to 15s for reCAPTCHA widget to fully render through proxy (proxy adds latency)
+    logger.info({ subreddit }, "Post submit: reCAPTCHA detected, waiting for widget to render...");
+    for (let i = 0; i < 30; i++) {
+      await sleep(500);
+      const hasFrame = await browser.page.evaluate(
+        () => !!document.querySelector("iframe[title='reCAPTCHA'], iframe[src*='recaptcha/api2/anchor']")
+      );
+      if (hasFrame) break;
+    }
 
     // Click the checkbox inside the reCAPTCHA iframe
     try {
       const captchaFrame = browser.page.frameLocator(
-        'iframe[src*="recaptcha/api2/anchor"], iframe[title*="reCAPTCHA"]'
+        'iframe[title="reCAPTCHA"], iframe[title*="recaptcha"]'
       );
       const checkbox = captchaFrame.locator("#recaptcha-anchor");
       if ((await checkbox.count()) > 0) {
-        await checkbox.click({ timeout: 5000 });
+        await checkbox.click({ timeout: 8000 });
+        logger.info({ subreddit }, "Post submit: reCAPTCHA checkbox clicked");
       }
     } catch {
       // Frame might not be accessible; fall through to token check
     }
 
-    // Wait up to 6s for the residential IP to auto-pass the checkbox
+    // Wait up to 8s for the residential IP to auto-pass the checkbox
     let captchaToken = "";
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 16; i++) {
       await sleep(500);
       captchaToken = await browser.page.evaluate(
         () => (document.querySelector<HTMLTextAreaElement>("#g-recaptcha-response")?.value ?? "")
