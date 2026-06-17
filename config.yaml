@@ -359,7 +359,7 @@ ramp:
 # checklist — written to add genuine value and build account authority.
 # The ramp's weeklyPostCap overrides the value below per stage.
 postCreation:
-  enabled: true
+  enabled: false
   subreddits:
     - EstatePlanning
     - AgingParents
