@@ -194,6 +194,7 @@ export class RedditBrowser {
     const reads = Math.random() < 0.7 ? randomInt(1, 2) : 0;
     for (let i = 0; i < reads; i += 1) {
       if (await this.openRandomFeedPost()) {
+        logger.info({ subreddit }, "Lurk-reading a post");
         await this.humanScroll(randomInt(1, 3));
         await this.browseComments(0.5);
         await this.goBack();
@@ -233,6 +234,7 @@ export class RedditBrowser {
       });
       await this.settleAfterLoad();
       await this.humanScroll(randomInt(1, 3));
+      logger.info("Checked notifications");
       // Sometimes also glance at private messages.
       if (Math.random() < 0.4) {
         await this.page.goto("https://www.reddit.com/message/inbox/", {
@@ -503,7 +505,10 @@ export class RedditBrowser {
       // Sometimes a comment is good enough to upvote — a far more common action
       // than voting on the post itself.
       if (Math.random() < commentUpvoteProbability) {
-        await this.upvoteComments(randomInt(1, 2));
+        const upvoted = await this.upvoteComments(randomInt(1, 2));
+        if (upvoted > 0) {
+          logger.info({ count: upvoted }, "Read thread and upvoted comment(s)");
+        }
       }
       // Occasionally scroll back up to re-read part of the discussion.
       if (Math.random() < 0.3) {
@@ -516,8 +521,8 @@ export class RedditBrowser {
     }
   }
 
-  /** Up-vote up to `count` comments in the current thread (best-effort). */
-  private async upvoteComments(count: number): Promise<void> {
+  /** Up-vote up to `count` comments in the current thread (best-effort). Returns how many. */
+  private async upvoteComments(count: number): Promise<number> {
     // Candidate up-vote-button selectors across new Reddit (shreddit, open
     // shadow DOM which Playwright's CSS engine pierces) and old Reddit.
     const selectors = [
@@ -551,6 +556,7 @@ export class RedditBrowser {
         }
       }
     }
+    return upvoted;
   }
 
   /** Type into a field located by CSS selector (used by the comment publisher). */
