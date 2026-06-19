@@ -22,6 +22,7 @@
   "dependencies": {
     "better-sqlite3": "^11.8.1",
     "dotenv": "^16.4.7",
+    "ghost-cursor": "^1.4.2",
     "openai": "^5.8.2",
     "pino": "^9.7.0",
     "playwright": "^1.54.1",

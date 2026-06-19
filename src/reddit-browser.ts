@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 import { BrowserContext, Locator, Page, chromium } from "rebrowser-playwright";
+import { path as ghostPath } from "ghost-cursor";
 
 import { AppConfig } from "./config.js";
 import { logger } from "./logger.js";
@@ -190,6 +191,8 @@ export class RedditBrowser {
       const direction = Math.random() < 0.15 ? -1 : 1;
       await this.page.mouse.wheel(0, direction * randomInt(220, 760));
       await this.pause(450, 1300);
+      // A real reader's hand never sits perfectly still on the mouse.
+      await this.idleDrift();
     }
   }
 
@@ -203,6 +206,8 @@ export class RedditBrowser {
     for (let i = 0; i < chunks; i += 1) {
       await this.page.mouse.wheel(0, randomInt(180, 520));
       await this.pause(1200, 2600);
+      // Drift the cursor while reading — the eye and hand wander together.
+      await this.idleDrift();
     }
   }
 
@@ -259,7 +264,9 @@ export class RedditBrowser {
 
   /**
    * Click a locator the way a person does: scroll it into view, move the cursor
-   * to a random point inside it along a curved, eased path, then press.
+   * to a point inside it (biased to centre, occasionally off-centre) along a
+   * human path, hover briefly, then press. The hover-dwell and the centre bias
+   * are both things real pointer users do and naive bots skip.
    */
   async humanClick(locator: Locator): Promise<void> {
     await locator.scrollIntoViewIfNeeded().catch(() => undefined);
@@ -269,36 +276,89 @@ export class RedditBrowser {
       return;
     }
     const target: Point = {
-      x: box.x + box.width * randomFloat(0.3, 0.7),
-      y: box.y + box.height * randomFloat(0.35, 0.65),
+      x: box.x + box.width * gaussianFraction(0.5, 0.16, 0.15, 0.85),
+      y: box.y + box.height * gaussianFraction(0.5, 0.16, 0.2, 0.8),
     };
     await this.humanMove(target);
-    await this.pause(80, 220);
+    // Settle on the target before pressing — a person's hand pauses, sometimes
+    // nudging a pixel or two, in the moment between arriving and clicking.
+    await this.pause(90, 260);
+    if (Math.random() < 0.3) {
+      await this.page.mouse.move(target.x + randomFloat(-2, 2), target.y + randomFloat(-2, 2));
+      await this.pause(40, 130);
+    }
     await this.page.mouse.down();
     await delay(randomInt(40, 110));
     await this.page.mouse.up();
   }
 
-  /** Move the cursor along a cubic-bezier path with eased, jittered timing. */
+  /**
+   * Move the cursor to a target like a person does. Uses ghost-cursor's path
+   * generator (Fitts's-law timing, variable curvature) so no two moves share the
+   * same velocity signature, and adds an explicit overshoot-then-correct on
+   * longer moves — the hallmark of a real hand that throws the cursor at a target
+   * and reels it back. Falls back to a cubic bezier if path generation fails.
+   */
   async humanMove(target: Point): Promise<void> {
     const start = this.cursor;
-    const dx = target.x - start.x;
-    const dy = target.y - start.y;
-    const control1: Point = {
-      x: start.x + dx * 0.3 + randomFloat(-60, 60),
-      y: start.y + dy * 0.3 + randomFloat(-60, 60),
-    };
-    const control2: Point = {
-      x: start.x + dx * 0.7 + randomFloat(-60, 60),
-      y: start.y + dy * 0.7 + randomFloat(-60, 60),
-    };
-    const steps = randomInt(18, 34);
-    for (let i = 1; i <= steps; i += 1) {
-      const t = easeInOut(i / steps);
-      const point = cubicBezier(start, control1, control2, target, t);
-      await this.page.mouse.move(point.x, point.y);
-      await delay(randomInt(6, 18));
+    const distance = Math.hypot(target.x - start.x, target.y - start.y);
+
+    // On longer throws, a real hand usually overshoots slightly then corrects.
+    if (distance > 130 && Math.random() < 0.55) {
+      const reach = Math.min(45, distance * 0.12);
+      const overshoot: Point = {
+        x: target.x + randomFloat(-reach, reach),
+        y: target.y + randomFloat(-reach, reach),
+      };
+      await this.tracePath(start, overshoot);
+      await delay(randomInt(40, 130));
+      await this.tracePath(overshoot, target);
+    } else {
+      await this.tracePath(start, target);
     }
+    this.cursor = target;
+  }
+
+  /** Drive the mouse from one point to another along a human-shaped path. */
+  private async tracePath(from: Point, to: Point): Promise<void> {
+    let points: Point[];
+    try {
+      points = ghostPath(from, to) as Point[];
+    } catch {
+      points = bezierFallback(from, to);
+    }
+    if (!points || points.length < 2) {
+      points = bezierFallback(from, to);
+    }
+    const total = points.length;
+    for (let i = 0; i < total; i += 1) {
+      const p = points[i]!;
+      // Micro-tremor: a real hand jitters a fraction of a pixel as it moves.
+      const jitterX = Math.random() < 0.25 ? randomFloat(-1.1, 1.1) : 0;
+      const jitterY = Math.random() < 0.25 ? randomFloat(-1.1, 1.1) : 0;
+      await this.page.mouse.move(p.x + jitterX, p.y + jitterY);
+      await delay(randomInt(4, 15));
+      // Rare mid-flight hesitation, as if the eye re-checked the target.
+      if (i > total * 0.2 && i < total * 0.8 && Math.random() < 0.04) {
+        await delay(randomInt(60, 180));
+      }
+    }
+  }
+
+  /**
+   * A small, idle wander of the cursor — the kind of motion a hand resting on a
+   * mouse makes while the eyes read. Called during scrolling and dwelling so the
+   * pointer is never frozen for seconds at a time (a strong automation tell).
+   */
+  async idleDrift(): Promise<void> {
+    if (Math.random() > 0.5) {
+      return;
+    }
+    const target: Point = {
+      x: clampNum(this.cursor.x + randomFloat(-55, 55), 5, 1435),
+      y: clampNum(this.cursor.y + randomFloat(-40, 40), 5, 895),
+    };
+    await this.tracePath(this.cursor, target);
     this.cursor = target;
   }
 
@@ -312,6 +372,31 @@ export class RedditBrowser {
   private async pause(minMs: number, maxMs: number): Promise<void> {
     await delay(randomInt(minMs, maxMs));
   }
+}
+
+/**
+ * Cubic-bezier path as an array of points — the fallback used when ghost-cursor's
+ * generator is unavailable, so {@link RedditBrowser.tracePath} always has a path
+ * to drive even if the dependency misbehaves.
+ */
+function bezierFallback(start: Point, target: Point): Point[] {
+  const dx = target.x - start.x;
+  const dy = target.y - start.y;
+  const control1: Point = {
+    x: start.x + dx * 0.3 + randomFloat(-60, 60),
+    y: start.y + dy * 0.3 + randomFloat(-60, 60),
+  };
+  const control2: Point = {
+    x: start.x + dx * 0.7 + randomFloat(-60, 60),
+    y: start.y + dy * 0.7 + randomFloat(-60, 60),
+  };
+  const steps = randomInt(18, 34);
+  const points: Point[] = [];
+  for (let i = 1; i <= steps; i += 1) {
+    const t = easeInOut(i / steps);
+    points.push(cubicBezier(start, control1, control2, target, t));
+  }
+  return points;
 }
 
 function cubicBezier(p0: Point, p1: Point, p2: Point, p3: Point, t: number): Point {
@@ -328,6 +413,21 @@ function cubicBezier(p0: Point, p1: Point, p2: Point, p3: Point, t: number): Poi
 
 function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+}
+
+/**
+ * A fraction in [min,max] biased toward `mean` with roughly normal spread
+ * (average of two uniforms ≈ triangular/normal). Used to pick a click point
+ * inside an element that clusters near the centre but isn't pixel-identical.
+ */
+function gaussianFraction(mean: number, sd: number, min: number, max: number): number {
+  const gauss = (Math.random() + Math.random()) / 2; // ~centred on 0.5
+  const value = mean + (gauss - 0.5) * 2 * sd * 1.7;
+  return clampNum(value, min, max);
+}
+
+function clampNum(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 const KEY_NEIGHBORS: Record<string, string> = {
