@@ -185,6 +185,97 @@ export class RedditBrowser {
     await this.humanScroll(randomInt(1, 3));
   }
 
+  /**
+   * Open a post the way a person does — by clicking its card in a feed rather
+   * than deep-linking to the URL. Cold full-page loads of `/comments/` pages are
+   * both an automation tell (no referrer, no click) and, in practice, what
+   * Reddit throttles: feeds load reliably while cold post-page gotos time out.
+   *
+   * Strategy, in order:
+   *   1. Click the card if it's already on the page we're looking at.
+   *   2. Otherwise visit the subreddit feed and scroll to find the card.
+   *   3. Last resort, open the URL directly (still "warm" — we're already on
+   *      Reddit with a session and history).
+   *
+   * Returns how the post was opened so the caller can navigate "back" to the
+   * feed afterwards when it came from a click, like a real reader would.
+   */
+  async openPost(post: { id: string; url: string; subreddit: string }): Promise<"click" | "goto"> {
+    if (await this.clickPostCard(post.id)) {
+      return "click";
+    }
+
+    try {
+      // Discovered posts are recent (< 12h), so the "new" feed is where they're
+      // most likely to be found and clicked through to.
+      await this.page.goto(`https://www.reddit.com/r/${post.subreddit}/new/`, {
+        waitUntil: "domcontentloaded",
+        timeout: 20_000,
+      });
+      await this.pause(1100, 2200);
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        if (await this.clickPostCard(post.id)) {
+          return "click";
+        }
+        await this.humanScroll(2);
+      }
+    } catch {
+      // Feed navigation hiccup — fall through to a direct open.
+    }
+
+    await this.page.goto(post.url, { waitUntil: "domcontentloaded", timeout: 20_000 });
+    await this.pause(1000, 2000);
+    return "goto";
+  }
+
+  /**
+   * Click the title link of a post card present on the current page. Returns
+   * false (without throwing) if the card isn't here or the click doesn't land on
+   * a post page, so {@link openPost} can fall back to another strategy.
+   */
+  private async clickPostCard(postId: string): Promise<boolean> {
+    const card = this.page.locator(`shreddit-post[id="t3_${postId}"]`).first();
+    if ((await card.count()) === 0) {
+      return false;
+    }
+    // Any anchor inside the card pointing at the comments page is the human
+    // click target (the title link / full-post overlay link).
+    const link = card.locator('a[href*="/comments/"]').first();
+    const clickable = (await link.count()) > 0 ? link : card;
+    try {
+      await clickable.scrollIntoViewIfNeeded();
+      await this.pause(300, 800);
+      await this.humanClick(clickable);
+      await this.page.waitForURL((url) => url.toString().includes("/comments/"), { timeout: 15_000 });
+    } catch {
+      return false;
+    }
+    await this.pause(800, 1600);
+    return true;
+  }
+
+  /** Navigate back to the previous page, the way the browser's back button does. */
+  async goBack(): Promise<void> {
+    try {
+      await this.page.goBack({ waitUntil: "domcontentloaded", timeout: 15_000 });
+      await this.pause(900, 1900);
+    } catch {
+      // Nothing to go back to, or the back nav stalled — caller will re-navigate.
+    }
+  }
+
+  /** A brief, aimless browse of the home feed — how a session actually begins. */
+  async warmUp(): Promise<void> {
+    try {
+      await this.page.goto("https://www.reddit.com/", { waitUntil: "domcontentloaded", timeout: 20_000 });
+      await this.pause(1200, 2600);
+      await this.humanScroll(randomInt(2, 4));
+      await this.maybeMicroBreak(0.4);
+    } catch {
+      // A warm-up hiccup must never abort the session.
+    }
+  }
+
   async humanScroll(times: number): Promise<void> {
     for (let index = 0; index < times; index += 1) {
       // Vary direction occasionally and step size, like a real reader.

@@ -59,6 +59,10 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
     await browser.withSession(async () => {
       await browser.login();
 
+      // Begin like a person: open Reddit and browse the home feed for a moment
+      // before doing anything purposeful, rather than deep-linking instantly.
+      await browser.warmUp();
+
       // Account-maturity ramp: read age + karma and auto-select the safe stage.
       if (config.ramp.enabled && !forcedDryRun) {
         const stats = await fetchAccountStats(browser, config.redditUsername);
@@ -186,15 +190,23 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
         return;
       }
 
+      // Read posts grouped by subreddit so consecutive opens can share a feed —
+      // both faster and more human (you read several threads from one sub before
+      // moving on, rather than hopping subreddits post by post).
+      const orderedPending = [...pending].sort((a, b) => a.subreddit.localeCompare(b.subreddit));
+
       const scored: Array<{ post: RedditPost | StoredPost; analysis: AnalysisResult; draft: string }> = [];
-      for (const post of pending) {
+      let consecutiveOpenFailures = 0;
+      for (const post of orderedPending) {
         try {
-          // Open the post like a reader would, pull its body from the page, and
+          // Open the post like a reader would — click its card in the feed rather
+          // than cold-loading the URL — then pull its body from the page and
           // persist it. The body isn't known from the feed, so this is also where
           // the content filter (length + keywords) runs.
-          await browser.idleBrowse(post.url);
+          const opened = await browser.openPost(post);
           post.body = await readPostBody(browser);
           db.saveDiscovered(post);
+          consecutiveOpenFailures = 0;
 
           const postGroup = groupForSubreddit(post.subreddit);
           const keywords = postGroup?.keywords?.length
@@ -203,6 +215,7 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
           const content = evaluateContent(post, eff.discovery, keywords);
           if (!content.ok) {
             db.recordAnalysis(post.id, { relevance: 0, intent: 0, quality: 0, reason: `filtered: ${content.reason}`, draftComment: null });
+            if (opened === "click") await browser.goBack();
             continue;
           }
 
@@ -229,20 +242,32 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
             "Scored post",
           );
           db.recordAnalysis(post.id, analysis);
+
+          // Stop analyzing once we have enough quality drafts for this session.
+          // No point spending tokens on posts beyond what the daily cap allows.
+          let enough = false;
           if (analysis.draftComment) {
             scored.push({ post, analysis, draft: analysis.draftComment });
-            // Stop analyzing once we have enough quality drafts for this session.
-            // No point spending tokens on posts beyond what the daily cap allows.
             const draftTarget = eff.posting.enabled ? eff.posting.dailyCap * 2 : 4;
             if (scored.length >= draftTarget) {
               logger.info({ drafts: scored.length, cap: eff.posting.dailyCap }, "Enough quality drafts collected; stopping analysis");
-              break;
+              enough = true;
             }
           }
+          // Return to the feed afterwards, like a reader clicking "back".
+          if (opened === "click") await browser.goBack();
+          if (enough) break;
           await browser.maybeMicroBreak();
         } catch (error) {
           // A timeout or navigation hiccup on one post shouldn't end the run.
+          consecutiveOpenFailures += 1;
           logger.warn({ postId: post.id, error: String(error) }, "Analysis failed for post, skipping");
+          // If posts keep failing to open back-to-back, Reddit is likely
+          // throttling us — stop hammering and let the session wind down.
+          if (consecutiveOpenFailures >= 3) {
+            logger.warn({ consecutiveOpenFailures }, "Consecutive post-open failures; Reddit may be throttling — ending analysis early");
+            break;
+          }
         }
       }
 
