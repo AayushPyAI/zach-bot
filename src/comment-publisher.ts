@@ -34,6 +34,8 @@ async function publishOldReddit(
   // the way a person decides a post is worth their vote and their reply.
   await browser.humanScroll(2);
   await browser.tryUpvote(config.humanize.upvoteProbability);
+  // Read the existing discussion (and maybe upvote a comment) before replying.
+  await browser.browseComments(config.humanize.upvoteProbability);
 
   const selector = ".commentarea form.usertext textarea[name='text']";
   const box = browser.page.locator(selector).first();
@@ -60,6 +62,8 @@ async function publishNewReddit(
   // Read the thread a little before reacting — upvote after reading, then reply.
   await browser.humanScroll(2);
   await browser.tryUpvote(config.humanize.upvoteProbability);
+  // Read the existing discussion (and maybe upvote a comment) before replying.
+  await browser.browseComments(config.humanize.upvoteProbability);
 
   const selector = [
     'textarea[placeholder*="comment" i]',

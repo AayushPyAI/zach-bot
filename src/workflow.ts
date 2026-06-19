@@ -245,6 +245,9 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
 
           await browser.readDwell(post.body);
           await browser.tryUpvote(eff.humanize.upvoteProbability);
+          // Read the discussion and upvote a helpful comment or two — what a
+          // real reader is actually here to do, not just skim the OP and leave.
+          await browser.browseComments(eff.humanize.upvoteProbability);
           // Optionally research the topic live before drafting (config.ai.liveSearch).
           const research = await analyzer.research(post);
           // Brand mentions only where the subreddit allows them; otherwise topical.

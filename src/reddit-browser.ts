@@ -341,6 +341,79 @@ export class RedditBrowser {
     }
   }
 
+  /**
+   * Engage with the comment section the way a reader actually does: scroll down
+   * through the discussion, dwell on it, and upvote a helpful comment or two.
+   * The bot used to read only the original post and leave — never touching the
+   * thread that everyone else is here for, which is the most un-human thing a
+   * Reddit account can do. The reading scroll is DOM-agnostic and always runs;
+   * comment up-votes are best-effort across old/new Reddit markup and silently
+   * do nothing if the buttons aren't found. Never throws.
+   *
+   * @param commentUpvoteProbability chance of up-voting 1–2 comments this visit
+   */
+  async browseComments(commentUpvoteProbability = 0.4): Promise<void> {
+    try {
+      // Read down through the thread, pausing on what scrolls into view.
+      const passes = randomInt(2, 5);
+      for (let i = 0; i < passes; i += 1) {
+        await this.page.mouse.wheel(0, randomInt(300, 720));
+        await this.pause(1400, 3600);
+        await this.idleDrift();
+      }
+      // Sometimes a comment is good enough to upvote — a far more common action
+      // than voting on the post itself.
+      if (Math.random() < commentUpvoteProbability) {
+        await this.upvoteComments(randomInt(1, 2));
+      }
+      // Occasionally scroll back up to re-read part of the discussion.
+      if (Math.random() < 0.3) {
+        await this.page.mouse.wheel(0, -randomInt(300, 800));
+        await this.pause(1000, 2600);
+        await this.idleDrift();
+      }
+    } catch {
+      // Comment browsing must never abort the session.
+    }
+  }
+
+  /** Up-vote up to `count` comments in the current thread (best-effort). */
+  private async upvoteComments(count: number): Promise<void> {
+    // Candidate up-vote-button selectors across new Reddit (shreddit, open
+    // shadow DOM which Playwright's CSS engine pierces) and old Reddit.
+    const selectors = [
+      'shreddit-comment button[aria-label*="upvote" i]',
+      'shreddit-comment [aria-label*="upvote" i]',
+      ".commentarea .comment .arrow.up:not(.upmod)",
+    ];
+    let upvoted = 0;
+    for (const selector of selectors) {
+      if (upvoted >= count) break;
+      const buttons = this.page.locator(selector);
+      const total = await buttons.count().catch(() => 0);
+      if (total === 0) continue;
+      // Stay near the top of the thread, where a reader's attention is, and
+      // pick a couple of distinct comments rather than the same one.
+      const pool = Math.min(total, 8);
+      const chosen = new Set<number>();
+      while (chosen.size < Math.min(count - upvoted, pool)) {
+        chosen.add(randomInt(0, pool - 1));
+      }
+      for (const index of chosen) {
+        if (upvoted >= count) break;
+        const button = buttons.nth(index);
+        try {
+          if (!(await button.isVisible())) continue;
+          await this.humanClick(button);
+          upvoted += 1;
+          await this.pause(600, 1800);
+        } catch {
+          // Button vanished or wasn't clickable — skip it.
+        }
+      }
+    }
+  }
+
   /** Type into a field located by CSS selector (used by the comment publisher). */
   async humanType(selector: string, text: string, cpsMin: number, cpsMax: number): Promise<void> {
     const field = this.page.locator(selector).first();
