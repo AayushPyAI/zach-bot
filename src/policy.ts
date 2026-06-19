@@ -156,6 +156,29 @@ export function hourActivityWeight(hour: number): number {
   return curve[hour] ?? 0.3;
 }
 
+/** Day of week (0=Sunday … 6=Saturday) in a given timezone. */
+export function dayInTimeZone(timeZone: string, date: Date = new Date()): number {
+  try {
+    const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone }).format(date);
+    const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    return map[weekday] ?? date.getDay();
+  } catch {
+    return date.getDay();
+  }
+}
+
+/**
+ * Per-day activity multiplier. People don't use Reddit identically every day —
+ * a touch lighter midweek, a touch heavier on weekends. Combined with the hourly
+ * curve so activity has both a daily and a weekly shape rather than being flat
+ * across the week.
+ */
+export function dayActivityWeight(day: number): number {
+  // Sun  Mon  Tue  Wed  Thu  Fri  Sat
+  const weights = [1.0, 0.85, 0.85, 0.9, 0.9, 0.95, 1.0];
+  return weights[day] ?? 1;
+}
+
 export interface PostingGateInput {
   enabled: boolean;
   dailyCap: number;

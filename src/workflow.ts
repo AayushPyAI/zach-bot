@@ -12,6 +12,8 @@ import { OpenAiAnalyzer, PromotionLevel } from "./openai-analyzer.js";
 import { loadProductKnowledge, ProductKnowledge } from "./products.js";
 import { selectStage } from "./ramp.js";
 import {
+  dayActivityWeight,
+  dayInTimeZone,
   evaluateContent,
   evaluatePostingGate,
   evaluateRemovalThrottle,
@@ -78,6 +80,11 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
       // before doing anything purposeful, rather than deep-linking instantly.
       await browser.warmUp();
 
+      // Checking notifications is one of the first things a logged-in user does.
+      if (Math.random() < 0.6) {
+        await browser.checkInbox();
+      }
+
       // Account-maturity ramp: read age + karma and auto-select the safe stage.
       if (config.ramp.enabled && !forcedDryRun) {
         const stats = await fetchAccountStats(browser, config.redditUsername);
@@ -135,7 +142,8 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
       // hourly-rhythm roll both use the persona's own timezone, not the server's.
       if (eff.humanize.enabled && eff.posting.enabled) {
         const localHour = hourInTimeZone(eff.browser.timezoneId);
-        const activityWeight = hourActivityWeight(localHour);
+        const activityWeight =
+          hourActivityWeight(localHour) * dayActivityWeight(dayInTimeZone(eff.browser.timezoneId));
         if (!withinActiveHours(eff.humanize.activeHours, localHour)) {
           logger.info({ localHour }, "Outside active hours; this session will read/draft but not post");
           eff.posting.enabled = false;
@@ -373,6 +381,17 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
           { label: "create-post", prob: 0.5, run: () => maybeCreatePost(browser, eff, db, knowledge) },
           { label: "follow-ups", prob: 0.85, run: () => processFollowUps(browser, db, eff, analyzer, knowledge) },
           { label: "ama-tracker", prob: 0.5, run: () => checkAmaReadiness(db, eff, eff.openAiApiKey) },
+          {
+            // Occasionally join a community the account is active in, so it isn't
+            // active across dozens of subs while subscribed to none.
+            label: "join-sub",
+            prob: 0.4,
+            run: async () => {
+              const subs = sessionTargets.map((t) => t.subreddit);
+              const sub = subs[Math.floor(Math.random() * subs.length)];
+              if (sub) await browser.joinSubreddit(sub);
+            },
+          },
         ];
         if (eff.crossPosting.enabled) {
           tail.push({

@@ -188,7 +188,142 @@ export class RedditBrowser {
     await this.page.goto(`https://www.reddit.com/r/${subreddit}/`, { waitUntil: "domcontentloaded" });
     await this.settleAfterLoad();
     await this.humanScroll(randomInt(3, 6));
+    // Gap #4 — pure lurk-reading: a person browsing a feed opens posts just to
+    // read them, commenting on almost none. Open one or two, read the thread,
+    // then go back to the feed.
+    const reads = Math.random() < 0.7 ? randomInt(1, 2) : 0;
+    for (let i = 0; i < reads; i += 1) {
+      if (await this.openRandomFeedPost()) {
+        await this.humanScroll(randomInt(1, 3));
+        await this.browseComments(0.5);
+        await this.goBack();
+        await this.humanScroll(randomInt(1, 2));
+      }
+    }
     await this.maybeMicroBreak();
+  }
+
+  /** Open a random post visible in the current feed by clicking its card. */
+  private async openRandomFeedPost(): Promise<boolean> {
+    const links = this.page.locator('shreddit-post a[href*="/comments/"]');
+    const total = await links.count().catch(() => 0);
+    if (total === 0) return false;
+    const link = links.nth(randomInt(0, Math.min(total, 10) - 1));
+    try {
+      await link.scrollIntoViewIfNeeded();
+      await this.pause(500, 1300);
+      await this.humanClick(link);
+      await this.page.waitForURL((url) => url.toString().includes("/comments/"), { timeout: 15_000 });
+    } catch {
+      return false;
+    }
+    await this.settleAfterLoad();
+    return true;
+  }
+
+  /**
+   * Gap #2 — check notifications/inbox, one of the most common things a logged-in
+   * user does (especially on arrival). Best-effort; never throws.
+   */
+  async checkInbox(): Promise<void> {
+    try {
+      await this.page.goto("https://www.reddit.com/notifications/", {
+        waitUntil: "domcontentloaded",
+        timeout: 20_000,
+      });
+      await this.settleAfterLoad();
+      await this.humanScroll(randomInt(1, 3));
+      // Sometimes also glance at private messages.
+      if (Math.random() < 0.4) {
+        await this.page.goto("https://www.reddit.com/message/inbox/", {
+          waitUntil: "domcontentloaded",
+          timeout: 20_000,
+        });
+        await this.settleAfterLoad();
+        await this.humanScroll(randomInt(1, 2));
+      }
+    } catch {
+      // Inbox check must never abort the session.
+    }
+  }
+
+  /**
+   * Gap #3 — join a subreddit the account is active in, so commenting from a
+   * community it belongs to looks natural. Idempotent: only clicks a "Join"
+   * control if one is present (an already-joined sub shows "Joined"/"Leave", so
+   * this no-ops). Best-effort; never throws.
+   */
+  async joinSubreddit(subreddit: string): Promise<boolean> {
+    try {
+      await this.page.goto(`https://www.reddit.com/r/${subreddit}/`, {
+        waitUntil: "domcontentloaded",
+        timeout: 20_000,
+      });
+      await this.settleAfterLoad();
+      await this.humanScroll(randomInt(1, 3));
+      // The join control across new Reddit variants; require the word "Join"
+      // (not "Joined") so we never click Leave on an already-joined sub.
+      const candidates = [
+        'shreddit-join-button button',
+        'button[aria-label^="Join" i]',
+        'button:has-text("Join")',
+      ];
+      for (const selector of candidates) {
+        const button = this.page.locator(selector).first();
+        if ((await button.count().catch(() => 0)) === 0) continue;
+        const label = ((await button.innerText().catch(() => "")) + " " +
+          (await button.getAttribute("aria-label").catch(() => ""))).toLowerCase();
+        if (!label.includes("join") || label.includes("joined")) continue;
+        if (!(await button.isVisible().catch(() => false))) continue;
+        await this.humanClick(button);
+        await this.pause(800, 2000);
+        logger.info({ subreddit }, "Joined subreddit");
+        return true;
+      }
+    } catch {
+      // Join attempt failed — fine, it's opportunistic.
+    }
+    return false;
+  }
+
+  /**
+   * Gap #5 — small reading micro-behaviors a real cursor produces: occasionally
+   * highlight a line of text, or hover over a link/username without clicking.
+   * Both are things detectors look for and naive bots never do. Best-effort.
+   */
+  async microReadGesture(): Promise<void> {
+    try {
+      if (Math.random() < 0.5) {
+        // Select a line of text by dragging the cursor across it.
+        const node = this.page.locator("p, .md p, [slot='text-body'] p").first();
+        if ((await node.count().catch(() => 0)) > 0 && (await node.isVisible().catch(() => false))) {
+          const box = await node.boundingBox();
+          if (box && box.width > 40) {
+            const y = box.y + box.height / 2;
+            await this.humanMove({ x: box.x + 6, y });
+            await this.page.mouse.down();
+            await this.page.mouse.move(box.x + Math.min(box.width - 6, randomFloat(60, 260)), y + randomFloat(-3, 3));
+            await this.pause(120, 400);
+            await this.page.mouse.up();
+            await this.pause(300, 900);
+            // Click elsewhere to clear the selection, as people do.
+            await this.page.mouse.click(box.x + box.width + 20, y);
+          }
+        }
+      } else {
+        // Hover over a link/username without clicking.
+        const link = this.page.locator('a[href*="/user/"], a[href*="/r/"]').first();
+        if ((await link.count().catch(() => 0)) > 0 && (await link.isVisible().catch(() => false))) {
+          const box = await link.boundingBox();
+          if (box) {
+            await this.humanMove({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+            await this.pause(500, 1600);
+          }
+        }
+      }
+    } catch {
+      // Micro-gestures are pure flavour — never let them break anything.
+    }
   }
 
   async idleBrowse(url?: string): Promise<void> {
@@ -316,6 +451,10 @@ export class RedditBrowser {
       await this.pause(1600, 3400);
       // Drift the cursor while reading — the eye and hand wander together.
       await this.idleDrift();
+    }
+    // Occasionally highlight a line or hover a link, as a real reader does.
+    if (Math.random() < 0.35) {
+      await this.microReadGesture();
     }
   }
 
