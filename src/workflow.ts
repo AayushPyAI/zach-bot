@@ -15,6 +15,8 @@ import {
   evaluateContent,
   evaluatePostingGate,
   evaluateRemovalThrottle,
+  hourActivityWeight,
+  hourInTimeZone,
   isSubredditCoolingDown,
   withinActiveHours,
 } from "./policy.js";
@@ -54,6 +56,19 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
   const eff: AppConfig = structuredClone(config);
   const forcedDryRun = opts.forcePosting === false;
   eff.posting.enabled = forcedDryRun ? false : opts.forcePosting ?? config.posting.enabled;
+
+  // Session "energy": not every visit is a full sweep. ~30% are quick check-ins
+  // (skim a couple of subs, maybe one reply, no posting chores); ~20% are long,
+  // thorough sessions; the rest are normal. This varies the macro-shape of a
+  // session so they don't all look structurally identical.
+  const energy = pickSessionEnergy();
+  const energyScale = energy === "quick" ? 0.4 : energy === "deep" ? 1.35 : 1;
+  eff.runtime.maxSubredditsPerSession = Math.max(3, Math.round(eff.runtime.maxSubredditsPerSession * energyScale));
+  eff.runtime.maxAnalyzePerRun = Math.max(2, Math.round(eff.runtime.maxAnalyzePerRun * energyScale));
+  logger.info(
+    { energy, maxSubreddits: eff.runtime.maxSubredditsPerSession, maxAnalyze: eff.runtime.maxAnalyzePerRun },
+    "Session energy selected",
+  );
 
   try {
     await browser.withSession(async () => {
@@ -116,10 +131,16 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
         eff.posting.enabled = false;
       }
 
-      // Posting-time gates (active hours, random skip) now that posting is resolved.
+      // Posting-time gates now that posting is resolved. Active hours and the
+      // hourly-rhythm roll both use the persona's own timezone, not the server's.
       if (eff.humanize.enabled && eff.posting.enabled) {
-        if (!withinActiveHours(eff.humanize.activeHours, new Date().getHours())) {
-          logger.info("Outside active hours; this session will read/draft but not post");
+        const localHour = hourInTimeZone(eff.browser.timezoneId);
+        const activityWeight = hourActivityWeight(localHour);
+        if (!withinActiveHours(eff.humanize.activeHours, localHour)) {
+          logger.info({ localHour }, "Outside active hours; this session will read/draft but not post");
+          eff.posting.enabled = false;
+        } else if (Math.random() > activityWeight) {
+          logger.info({ localHour, activityWeight }, "Low-activity hour for this persona; reading/drafting but not posting");
           eff.posting.enabled = false;
         } else if (Math.random() < eff.humanize.skipRunProbability) {
           logger.info("Random skip-run gate triggered; this session will read/draft but not post");
@@ -330,51 +351,71 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
         }
       }
 
-      // After the comment pass, attempt to create an original post if the
-      // weekly cap and subreddit cooldown allow it.
-      try {
-        await maybeCreatePost(browser, eff, db, knowledge);
-      } catch (error) {
-        logger.warn({ error: String(error) }, "Post creation failed; session continues");
+      // Sometimes step away for a bit between finishing replies and any posting
+      // chores, the way a person gets pulled to another tab mid-session.
+      if (eff.humanize.enabled && Math.random() < 0.3) {
+        await browser.simulateAwayBreak();
       }
 
-      // Cross-post a recent original post to a related subreddit.
-      if (eff.crossPosting.enabled) {
-        try {
-          const cp = new CrossPoster(eff, eff.openAiApiKey);
-          await cp.maybeCrossPost(browser, db);
-        } catch (error) {
-          logger.warn({ error: String(error) }, "Cross-poster failed, continuing");
+      // Tail activities (original posts, cross-posts, polls, follow-ups, AMA
+      // tracking) are occasional rather than every-session, and their order is
+      // not fixed. Quick check-in sessions skip them entirely. Each activity
+      // keeps its own internal caps/cooldowns; the probability here just stops
+      // them firing on a predictable cadence right after every comment pass.
+      if (energy !== "quick") {
+        const tail: Array<{ label: string; prob: number; run: () => Promise<void> }> = [
+          { label: "create-post", prob: 0.5, run: () => maybeCreatePost(browser, eff, db, knowledge) },
+          { label: "follow-ups", prob: 0.85, run: () => processFollowUps(browser, db, eff, analyzer, knowledge) },
+          { label: "ama-tracker", prob: 0.5, run: () => checkAmaReadiness(db, eff, eff.openAiApiKey) },
+        ];
+        if (eff.crossPosting.enabled) {
+          tail.push({
+            label: "cross-post",
+            prob: 0.5,
+            run: async () => {
+              const cp = new CrossPoster(eff, eff.openAiApiKey);
+              await cp.maybeCrossPost(browser, db);
+            },
+          });
         }
-      }
-
-      // Create a poll if subreddit is eligible (cooldown + weekly cap).
-      if (eff.pollCreationV2.enabled && eff.posting.enabled) {
-        try {
-          const pc = new PollCreator(eff, eff.openAiApiKey);
-          await pc.maybeCreatePoll(browser, db);
-        } catch (error) {
-          logger.warn({ error: String(error) }, "Poll creation failed, continuing");
+        if (eff.pollCreationV2.enabled && eff.posting.enabled) {
+          tail.push({
+            label: "poll",
+            prob: 0.5,
+            run: async () => {
+              const pc = new PollCreator(eff, eff.openAiApiKey);
+              await pc.maybeCreatePoll(browser, db);
+            },
+          });
         }
-      }
 
-      // Re-visit threads we commented on at 48h and 7d to re-engage.
-      try {
-        await processFollowUps(browser, db, eff, analyzer, knowledge);
-      } catch (error) {
-        logger.warn({ error: String(error) }, "Follow-up processing failed, continuing");
-      }
-
-      // AMA readiness tracker — logs milestone progress, drafts content when ready.
-      try {
-        await checkAmaReadiness(db, eff, eff.openAiApiKey);
-      } catch (error) {
-        logger.warn({ error: String(error) }, "AMA tracker failed, continuing");
+        tail.sort(() => Math.random() - 0.5);
+        for (const activity of tail) {
+          if (Math.random() > activity.prob) {
+            continue;
+          }
+          try {
+            await activity.run();
+          } catch (error) {
+            logger.warn({ activity: activity.label, error: String(error) }, "Tail activity failed, continuing");
+          }
+          await browser.maybeMicroBreak(0.3);
+        }
       }
     });
   } finally {
     db.close();
   }
+}
+
+type SessionEnergy = "quick" | "normal" | "deep";
+
+/** Pick how much work this session does, so sessions vary in length and scope. */
+function pickSessionEnergy(): SessionEnergy {
+  const roll = Math.random();
+  if (roll < 0.3) return "quick";
+  if (roll < 0.8) return "normal";
+  return "deep";
 }
 
 function pickSort(config: AppConfig): "new" | "hot" | "rising" {

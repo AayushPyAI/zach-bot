@@ -460,6 +460,38 @@ export class RedditBrowser {
     }
   }
 
+  /**
+   * Simulate the user switching to another tab/app for a bit: fire the same
+   * blur + visibilitychange events the browser does, stay "hidden" for a real
+   * pause, then come back. A session that holds a single tab in continuous
+   * focus for hours — never once looking away — is not how people browse, and
+   * visibility/focus is exactly what page-side bot heuristics watch. All of it
+   * is best-effort; any failure is swallowed so it can never abort a session.
+   */
+  async simulateAwayBreak(minMs = 8000, maxMs = 45_000): Promise<void> {
+    const setHidden = (hidden: boolean): Promise<void> =>
+      this.page
+        .evaluate((isHidden) => {
+          try {
+            Object.defineProperty(document, "visibilityState", {
+              value: isHidden ? "hidden" : "visible",
+              configurable: true,
+            });
+            Object.defineProperty(document, "hidden", { value: isHidden, configurable: true });
+            document.dispatchEvent(new Event("visibilitychange"));
+            window.dispatchEvent(new Event(isHidden ? "blur" : "focus"));
+          } catch {
+            /* ignore — page may have navigated */
+          }
+        }, hidden)
+        .catch(() => undefined);
+
+    await setHidden(true);
+    await this.pause(minMs, maxMs);
+    await setHidden(false);
+    await this.pause(400, 1200);
+  }
+
   private async pause(minMs: number, maxMs: number): Promise<void> {
     await delay(randomInt(minMs, maxMs));
   }

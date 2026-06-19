@@ -116,6 +116,46 @@ export function withinActiveHours(activeHours: readonly [number, number], hour: 
   return hour >= start || hour < end;
 }
 
+/**
+ * The current hour (0–23) in a given IANA timezone, independent of the server's
+ * own clock. The account's persona lives in one timezone (browser.timezoneId);
+ * driving its activity by the server's local hour instead — e.g. a US-persona
+ * account most active during Berlin afternoons — is itself an automation tell.
+ */
+export function hourInTimeZone(timeZone: string, date: Date = new Date()): number {
+  try {
+    const value = new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      hour12: false,
+      timeZone,
+    }).formatToParts(date).find((part) => part.type === "hour")?.value;
+    const hour = Number(value);
+    if (Number.isNaN(hour)) {
+      return date.getHours();
+    }
+    return hour === 24 ? 0 : hour;
+  } catch {
+    return date.getHours();
+  }
+}
+
+/**
+ * Relative likelihood (0–1) that a real person is actively browsing/posting at
+ * a given local hour. A flat active-hours window posts with equal probability at
+ * 9am and 9pm; real activity has a shape — quiet overnight, a midday bump, an
+ * evening peak. The workflow rolls against this so posting frequency follows a
+ * human daily rhythm rather than a uniform distribution across the window.
+ */
+export function hourActivityWeight(hour: number): number {
+  const curve = [
+    0.02, 0.02, 0.02, 0.02, 0.02, 0.03, // 0–5  overnight
+    0.08, 0.20, 0.40, 0.60, 0.60, 0.65, // 6–11 morning ramp
+    0.85, 0.80, 0.50, 0.45, 0.50, 0.65, // 12–17 lunch peak, afternoon dip
+    0.70, 0.90, 0.90, 0.85, 0.50, 0.25, // 18–23 evening peak, wind down
+  ];
+  return curve[hour] ?? 0.3;
+}
+
 export interface PostingGateInput {
   enabled: boolean;
   dailyCap: number;
