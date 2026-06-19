@@ -338,6 +338,11 @@ export class RedditBrowser {
   async humanTypeInto(field: Locator, text: string, cpsMin = 3, cpsMax = 6): Promise<void> {
     await this.humanClick(field);
     await this.pause(150, 450);
+    await this.typeChars(field, text, cpsMin, cpsMax);
+  }
+
+  /** The character-by-character engine shared by humanTypeInto and humanCompose. */
+  private async typeChars(field: Locator, text: string, cpsMin: number, cpsMax: number): Promise<void> {
     for (const char of text) {
       if (/[a-z]/i.test(char) && Math.random() < 0.04) {
         const typo = neighborKey(char);
@@ -349,6 +354,51 @@ export class RedditBrowser {
       await field.type(char, { delay: 1000 / randomFloat(cpsMin, cpsMax) });
       if ([".", "?", "!"].includes(char) && Math.random() < 0.5) {
         await this.pause(250, 900);
+      }
+    }
+  }
+
+  /**
+   * Compose a comment the way a person writes one: not in a single uninterrupted
+   * stream, but sentence by sentence, pausing to think between thoughts,
+   * occasionally scrolling back up to re-read the post, and now and then making a
+   * false start — typing a few characters, reconsidering, deleting them, and
+   * carrying on. The finished text is identical to `text`; only the *process* of
+   * arriving at it is humanized. Used for the comment body specifically.
+   */
+  async humanCompose(selector: string, text: string, cpsMin = 3, cpsMax = 6): Promise<void> {
+    const field = this.page.locator(selector).first();
+    await this.humanClick(field);
+    await this.pause(250, 700);
+
+    const segments = splitIntoSentences(text);
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index]!;
+
+      // Occasional false start: begin the thought, reconsider, backspace, rewrite.
+      if (segment.trim().length > 8 && Math.random() < 0.12) {
+        const k = randomInt(3, Math.min(7, segment.length));
+        await this.typeChars(field, segment.slice(0, k), cpsMin, cpsMax);
+        await this.pause(350, 950);
+        for (let b = 0; b < k; b += 1) {
+          await field.press("Backspace", { delay: randomInt(50, 150) });
+        }
+        await this.pause(200, 650);
+      }
+
+      await this.typeChars(field, segment, cpsMin, cpsMax);
+
+      if (index < segments.length - 1) {
+        // A beat to think before the next sentence.
+        await this.pause(400, 1500);
+        // Sometimes glance back up at the post being replied to, then return.
+        if (Math.random() < 0.25) {
+          await this.page.mouse.wheel(0, -randomInt(220, 520));
+          await this.pause(800, 2200);
+          await this.idleDrift();
+          await this.page.mouse.wheel(0, randomInt(220, 520));
+          await this.pause(400, 1000);
+        }
       }
     }
   }
@@ -536,6 +586,18 @@ function cubicBezier(p0: Point, p1: Point, p2: Point, p3: Point, t: number): Poi
 
 function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+}
+
+/**
+ * Split text into sentence-sized segments, keeping the punctuation and any
+ * trailing whitespace/newlines with each segment so that re-joining the
+ * segments reproduces the original text exactly (byte for byte). Used by
+ * humanCompose to type a comment thought by thought.
+ */
+function splitIntoSentences(text: string): string[] {
+  const matches = text.match(/[^.!?\n]*(?:[.!?]+|\n+|$)/g);
+  const segments = (matches ?? [text]).filter((segment) => segment.length > 0);
+  return segments.length > 0 ? segments : [text];
 }
 
 /**

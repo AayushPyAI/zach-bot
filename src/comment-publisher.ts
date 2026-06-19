@@ -30,6 +30,9 @@ async function publishOldReddit(
 ): Promise<boolean> {
   const url = post.url.replace("https://www.reddit.com", "https://old.reddit.com");
   await browser.idleBrowse(url);
+  // Read the thread a little before reacting to it — upvote comes after reading,
+  // the way a person decides a post is worth their vote and their reply.
+  await browser.humanScroll(2);
   await browser.tryUpvote(config.humanize.upvoteProbability);
 
   const selector = ".commentarea form.usertext textarea[name='text']";
@@ -38,7 +41,7 @@ async function publishOldReddit(
     return false;
   }
 
-  await browser.humanType(selector, text, config.posting.typingCharsPerSecondMin, config.posting.typingCharsPerSecondMax);
+  await browser.humanCompose(selector, text, config.posting.typingCharsPerSecondMin, config.posting.typingCharsPerSecondMax);
   const submit = browser.page.locator(".commentarea form.usertext button.save, .commentarea form.usertext button[type='submit']").first();
   if ((await submit.count()) === 0) {
     return false;
@@ -54,6 +57,8 @@ async function publishNewReddit(
   text: string,
 ): Promise<boolean> {
   await browser.idleBrowse(post.url);
+  // Read the thread a little before reacting — upvote after reading, then reply.
+  await browser.humanScroll(2);
   await browser.tryUpvote(config.humanize.upvoteProbability);
 
   const selector = [
@@ -75,7 +80,7 @@ async function publishNewReddit(
     return false;
   }
 
-  await browser.humanType(inputSelector, text, config.posting.typingCharsPerSecondMin, config.posting.typingCharsPerSecondMax);
+  await browser.humanCompose(inputSelector, text, config.posting.typingCharsPerSecondMin, config.posting.typingCharsPerSecondMax);
   const submit = browser.page.locator("button:has-text('Comment'), button:has-text('Reply')").first();
   if ((await submit.count()) === 0) {
     return false;
