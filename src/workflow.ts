@@ -198,6 +198,9 @@ export async function runWorkflow(config: AppConfig, opts: RunOptions = {}): Pro
             newPosts.push(post);
           }
         }
+        // Scan the feed for a beat before moving on to the next community,
+        // rather than hopping subreddits machine-fast.
+        await browser.think(1800, 5000);
       }
 
       const pending = dedupePosts([

@@ -170,19 +170,33 @@ export class RedditBrowser {
     return "";
   }
 
+  /**
+   * Pause the way a person does right after a page loads: a beat for the page to
+   * paint, then a moment to actually look at it before doing anything. Naive
+   * automation acts the instant navigation resolves — this is the single biggest
+   * "too fast" tell, so every navigation below settles through here.
+   */
+  async settleAfterLoad(): Promise<void> {
+    await this.pause(2200, 5200);
+    await this.idleDrift();
+    if (Math.random() < 0.45) {
+      await this.pause(900, 2400);
+    }
+  }
+
   async lurkSubreddit(subreddit: string): Promise<void> {
     await this.page.goto(`https://www.reddit.com/r/${subreddit}/`, { waitUntil: "domcontentloaded" });
-    await this.pause(1200, 2600);
-    await this.humanScroll(randomInt(2, 5));
+    await this.settleAfterLoad();
+    await this.humanScroll(randomInt(3, 6));
     await this.maybeMicroBreak();
   }
 
   async idleBrowse(url?: string): Promise<void> {
     if (url) {
       await this.page.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
-      await this.pause(1000, 2000);
+      await this.settleAfterLoad();
     }
-    await this.humanScroll(randomInt(1, 3));
+    await this.humanScroll(randomInt(2, 4));
   }
 
   /**
@@ -212,7 +226,7 @@ export class RedditBrowser {
         waitUntil: "domcontentloaded",
         timeout: 20_000,
       });
-      await this.pause(1100, 2200);
+      await this.settleAfterLoad();
       for (let attempt = 0; attempt < 4; attempt += 1) {
         if (await this.clickPostCard(post.id)) {
           return "click";
@@ -224,7 +238,7 @@ export class RedditBrowser {
     }
 
     await this.page.goto(post.url, { waitUntil: "domcontentloaded", timeout: 20_000 });
-    await this.pause(1000, 2000);
+    await this.settleAfterLoad();
     return "goto";
   }
 
@@ -244,13 +258,14 @@ export class RedditBrowser {
     const clickable = (await link.count()) > 0 ? link : card;
     try {
       await clickable.scrollIntoViewIfNeeded();
-      await this.pause(300, 800);
+      // Pause on the title as a person does before deciding to open it.
+      await this.pause(600, 1500);
       await this.humanClick(clickable);
       await this.page.waitForURL((url) => url.toString().includes("/comments/"), { timeout: 15_000 });
     } catch {
       return false;
     }
-    await this.pause(800, 1600);
+    await this.settleAfterLoad();
     return true;
   }
 
@@ -258,7 +273,7 @@ export class RedditBrowser {
   async goBack(): Promise<void> {
     try {
       await this.page.goBack({ waitUntil: "domcontentloaded", timeout: 15_000 });
-      await this.pause(900, 1900);
+      await this.settleAfterLoad();
     } catch {
       // Nothing to go back to, or the back nav stalled — caller will re-navigate.
     }
@@ -268,8 +283,8 @@ export class RedditBrowser {
   async warmUp(): Promise<void> {
     try {
       await this.page.goto("https://www.reddit.com/", { waitUntil: "domcontentloaded", timeout: 20_000 });
-      await this.pause(1200, 2600);
-      await this.humanScroll(randomInt(2, 4));
+      await this.settleAfterLoad();
+      await this.humanScroll(randomInt(3, 5));
       await this.maybeMicroBreak(0.4);
     } catch {
       // A warm-up hiccup must never abort the session.
@@ -281,7 +296,8 @@ export class RedditBrowser {
       // Vary direction occasionally and step size, like a real reader.
       const direction = Math.random() < 0.15 ? -1 : 1;
       await this.page.mouse.wheel(0, direction * randomInt(220, 760));
-      await this.pause(450, 1300);
+      // Linger on what just scrolled into view before scrolling again.
+      await this.pause(900, 2400);
       // A real reader's hand never sits perfectly still on the mouse.
       await this.idleDrift();
     }
@@ -290,13 +306,14 @@ export class RedditBrowser {
   /** Dwell on a page for a time proportional to how much text there is to read. */
   async readDwell(text: string): Promise<void> {
     const words = text.trim().split(/\s+/).filter(Boolean).length;
-    const wpm = randomInt(200, 340);
+    // Unhurried reading speed; a person skims, re-reads, and pauses to think.
+    const wpm = randomInt(160, 280);
     const baseMs = (words / wpm) * 60_000;
-    const dwell = Math.max(1500, Math.min(28_000, Math.round(baseMs)));
-    const chunks = Math.max(1, Math.round(dwell / 2500));
+    const dwell = Math.max(3500, Math.min(34_000, Math.round(baseMs)));
+    const chunks = Math.max(2, Math.round(dwell / 2500));
     for (let i = 0; i < chunks; i += 1) {
-      await this.page.mouse.wheel(0, randomInt(180, 520));
-      await this.pause(1200, 2600);
+      await this.page.mouse.wheel(0, randomInt(160, 480));
+      await this.pause(1600, 3400);
       // Drift the cursor while reading — the eye and hand wander together.
       await this.idleDrift();
     }
@@ -352,8 +369,8 @@ export class RedditBrowser {
         await this.pause(80, 220);
       }
       await field.type(char, { delay: 1000 / randomFloat(cpsMin, cpsMax) });
-      if ([".", "?", "!"].includes(char) && Math.random() < 0.5) {
-        await this.pause(250, 900);
+      if ([".", "?", "!"].includes(char) && Math.random() < 0.55) {
+        await this.pause(400, 1300);
       }
     }
   }
@@ -369,7 +386,8 @@ export class RedditBrowser {
   async humanCompose(selector: string, text: string, cpsMin = 3, cpsMax = 6): Promise<void> {
     const field = this.page.locator(selector).first();
     await this.humanClick(field);
-    await this.pause(250, 700);
+    // A moment to gather the thought before the first word.
+    await this.pause(700, 1800);
 
     const segments = splitIntoSentences(text);
     for (let index = 0; index < segments.length; index += 1) {
@@ -379,25 +397,25 @@ export class RedditBrowser {
       if (segment.trim().length > 8 && Math.random() < 0.12) {
         const k = randomInt(3, Math.min(7, segment.length));
         await this.typeChars(field, segment.slice(0, k), cpsMin, cpsMax);
-        await this.pause(350, 950);
+        await this.pause(500, 1300);
         for (let b = 0; b < k; b += 1) {
-          await field.press("Backspace", { delay: randomInt(50, 150) });
+          await field.press("Backspace", { delay: randomInt(70, 190) });
         }
-        await this.pause(200, 650);
+        await this.pause(300, 900);
       }
 
       await this.typeChars(field, segment, cpsMin, cpsMax);
 
       if (index < segments.length - 1) {
         // A beat to think before the next sentence.
-        await this.pause(400, 1500);
+        await this.pause(700, 2200);
         // Sometimes glance back up at the post being replied to, then return.
-        if (Math.random() < 0.25) {
+        if (Math.random() < 0.3) {
           await this.page.mouse.wheel(0, -randomInt(220, 520));
-          await this.pause(800, 2200);
+          await this.pause(1200, 3000);
           await this.idleDrift();
           await this.page.mouse.wheel(0, randomInt(220, 520));
-          await this.pause(400, 1000);
+          await this.pause(700, 1600);
         }
       }
     }
@@ -423,13 +441,13 @@ export class RedditBrowser {
     await this.humanMove(target);
     // Settle on the target before pressing — a person's hand pauses, sometimes
     // nudging a pixel or two, in the moment between arriving and clicking.
-    await this.pause(90, 260);
-    if (Math.random() < 0.3) {
+    await this.pause(220, 600);
+    if (Math.random() < 0.35) {
       await this.page.mouse.move(target.x + randomFloat(-2, 2), target.y + randomFloat(-2, 2));
-      await this.pause(40, 130);
+      await this.pause(120, 320);
     }
     await this.page.mouse.down();
-    await delay(randomInt(40, 110));
+    await delay(randomInt(60, 150));
     await this.page.mouse.up();
   }
 
@@ -478,10 +496,11 @@ export class RedditBrowser {
       const jitterX = Math.random() < 0.25 ? randomFloat(-1.1, 1.1) : 0;
       const jitterY = Math.random() < 0.25 ? randomFloat(-1.1, 1.1) : 0;
       await this.page.mouse.move(p.x + jitterX, p.y + jitterY);
-      await delay(randomInt(4, 15));
-      // Rare mid-flight hesitation, as if the eye re-checked the target.
-      if (i > total * 0.2 && i < total * 0.8 && Math.random() < 0.04) {
-        await delay(randomInt(60, 180));
+      // Slower, more deliberate travel than a snap-to-target bot move.
+      await delay(randomInt(9, 24));
+      // Occasional mid-flight hesitation, as if the eye re-checked the target.
+      if (i > total * 0.2 && i < total * 0.8 && Math.random() < 0.06) {
+        await delay(randomInt(90, 260));
       }
     }
   }
@@ -508,6 +527,11 @@ export class RedditBrowser {
     if (Math.random() < probability) {
       await this.pause(3000, 12_000);
     }
+  }
+
+  /** A deliberate "thinking"/reading pause callers can insert between steps. */
+  async think(minMs = 1500, maxMs = 4000): Promise<void> {
+    await this.pause(minMs, maxMs);
   }
 
   /**

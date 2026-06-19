@@ -390,8 +390,9 @@ posting:
   jitterMinutes: 45
   useOldReddit: true
   fallbackToOldReddit: true
-  typingCharsPerSecondMin: 3
-  typingCharsPerSecondMax: 6
+  # Deliberate, unhurried typing (~2-5 chars/sec ≈ 24-60 wpm).
+  typingCharsPerSecondMin: 2
+  typingCharsPerSecondMax: 5
 
 humanize:
   enabled: true
